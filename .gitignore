@@ -1,0 +1,41 @@
+# VocalWriter 2.0.1 itself -- KAE Labs' software, 2005. The application, its
+# dictionary, its voice bank, its demo songs and its manual are theirs, not
+# ours, and the manual says outright that it may not be redistributed. None of
+# it belongs in a public repository. Supply your own copy from
+# VocalWriter2.0.dmg; the README says where the files go.
+assets/
+docs/manual.txt
+
+# Audio rendered by VocalWriter itself, kept as the ground truth everything is
+# measured against. It is their program's output, and 39 MB of it.
+emu/out/
+
+# What this program makes
+out/
+*.wav
+*.aiff
+*.vws
+
+# What the build makes
+build/
+dist/
+*.egg-info/
+
+# Built, not written. The compiled core is made by `python -m ppc.build_core`
+# for whichever interpreter will run it, and one built for CPython is no use
+# to PyPy or to another platform.
+*.pyd
+*.so
+*.dylib
+__pycache__/
+*.py[cod]
+
+# Environments and editors
+.venv/
+venv/
+env/
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

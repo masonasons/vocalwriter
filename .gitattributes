@@ -1,0 +1,14 @@
+# Keep the repository in LF, whatever the working copy uses. This is a
+# cross-platform project: the engine runs on Windows and the Mac.
+* text=auto eol=lf
+
+*.c text
+*.py text
+*.md text
+*.json text
+
+# never munge these
+*.wav binary
+*.aiff binary
+*.mid binary
+*.pyd binary
