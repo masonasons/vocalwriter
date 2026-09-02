@@ -19,14 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-This licence covers only the work in this repository: the PowerPC interpreter,
-the file-format parsers, the analysis and VocalWriter Studio.
-
-It does not cover VocalWriter itself. VocalWriter 2.0.1, its EnglishLex
-dictionary, its GMSpeech voice bank, its demo songs and its manual are
-Copyright (c) 2005 KAE Labs, all rights reserved. VocalWriter, VocalTracks and
-Resonant Articulatory Synthesis (RAS) are trademarks of KAE Labs. This project
-is not affiliated with or endorsed by them.

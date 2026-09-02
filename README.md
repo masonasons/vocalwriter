@@ -391,7 +391,8 @@ Three traps in the note stream, all of which cost time:
 ## Licence
 
 The work in this repository -- the interpreter, the format parsers, the
-analysis and the editor -- is under the MIT licence; see [LICENSE](LICENSE).
+analysis and the editor -- is under the MIT licence; see [LICENSE](LICENSE)
+and [NOTICE](NOTICE).
 
 That covers none of VocalWriter. **VocalWriter 2.0.1 is Copyright (c) 2005 KAE
 Labs, all rights reserved**, as are its dictionary, its voice bank, its demo
