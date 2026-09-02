@@ -84,3 +84,29 @@ coll = COLLECT(
     upx=False,
     name='VocalWriterStudio',
 )
+
+# On macOS, wrap it as a bundle so it is an application rather than a folder
+# with a unix executable in it: double-clickable, its own Dock entry and menu
+# bar. `ppc/paths.py` already knows to look beside the .app for an `assets`
+# folder, so a recipient drops VocalWriter 2.0's files next to it.
+#
+# No icon is set. VocalWriter's own App.icns is KAE Labs' artwork and does not
+# belong in a program that is not theirs.
+if sys.platform == 'darwin':
+    app = BUNDLE(
+        coll,
+        name='VocalWriter Studio.app',
+        icon=None,
+        bundle_identifier='com.github.vocalwriter-studio',
+        info_plist={
+            'CFBundleName': 'VocalWriter Studio',
+            'CFBundleDisplayName': 'VocalWriter Studio',
+            'CFBundleShortVersionString': '1.0',
+            'CFBundleVersion': '1.0',
+            'NSHighResolutionCapable': True,
+            # It only ever plays audio it has rendered itself.
+            'LSApplicationCategoryType': 'public.app-category.music',
+            'NSHumanReadableCopyright':
+                'Runs VocalWriter 2.0 (KAE Labs, 2005), which is not included.',
+        },
+    )

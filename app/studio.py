@@ -225,6 +225,35 @@ class Named(wx.Accessible):
         return (wx.ACC_OK, self.hint)
 
 
+#: Whether wx.Accessible can actually be constructed. It is implemented on
+#: Windows only -- on Cocoa and GTK the class exists but its constructor raises
+#: NotImplementedError, which took the whole window down on the first control
+#: it reached. Nothing is lost by skipping it there: VoiceOver and Orca read
+#: the control's name, and `SetName` supplies that on every platform. Probed
+#: once, on first use, rather than at import.
+_ACCESSIBLE = None
+
+
+def set_accessible(ctrl, name, hint=''):
+    """Name a control for a screen reader, where the toolkit allows it.
+
+    Returns the accessible object so a caller can keep it alive and rename it
+    later, or None where the platform has no such thing.
+    """
+    global _ACCESSIBLE
+    if _ACCESSIBLE is None:
+        try:
+            Named('probe')
+            _ACCESSIBLE = True
+        except Exception:
+            _ACCESSIBLE = False
+    if not _ACCESSIBLE:
+        return None
+    named = Named(name, hint)
+    ctrl.SetAccessible(named)
+    return named
+
+
 #: Ask an up-down control which edit box belongs to it (UDM_GETBUDDY).
 UDM_GETBUDDY = 0x046A
 SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE = 0x0001, 0x0002, 0x0010
@@ -281,7 +310,7 @@ def labelled(parent, sizer, label, ctrl, proportion=0, hint=''):
                          label='%s (%s)' % (label, hint) if hint else label)
     ctrl.MoveAfterInTabOrder(text)
     ctrl.SetName(label)
-    ctrl.SetAccessible(Named(label, hint))
+    set_accessible(ctrl, label, hint)
     name_spin_buddy(ctrl, text)
     box = wx.BoxSizer(wx.HORIZONTAL)
     box.Add(text, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
@@ -295,8 +324,7 @@ def caption(parent, sizer, label, ctrl, proportion=1):
     text = wx.StaticText(parent, label=label)
     ctrl.MoveAfterInTabOrder(text)
     ctrl.SetName(label)
-    named = Named(label)
-    ctrl.SetAccessible(named)
+    named = set_accessible(ctrl, label)
     # kept so the caption can be changed afterwards, and so the accessible
     # object stays referenced for as long as the control it names does
     ctrl.caption_text = text

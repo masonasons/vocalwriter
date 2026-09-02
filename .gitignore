@@ -27,6 +27,9 @@ dist/
 *.pyd
 *.so
 *.dylib
+# cffi generates these beside the extension it builds
+ppc/_ppccore.c
+ppc/_ppccore.o
 __pycache__/
 *.py[cod]
 

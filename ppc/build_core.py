@@ -54,7 +54,10 @@ def build(verbose=True):
     with open(os.path.join(HERE, 'core.c')) as fh:
         source = fh.read()
     ffi.set_source('ppc._ppccore', source)
-    out = ffi.compile(tmpdir=HERE, verbose=verbose)
+    # The module name is a package path, and cffi resolves it against tmpdir,
+    # so tmpdir has to be the directory `ppc` lives in -- not `ppc` itself, or
+    # the extension is built into ppc/ppc/ where nothing looks for it.
+    out = ffi.compile(tmpdir=os.path.dirname(HERE), verbose=verbose)
     return out
 
 
