@@ -1,9 +1,32 @@
-# VocalWriter 2.0.1 itself -- KAE Labs' software, 2005. The application, its
-# dictionary, its voice bank, its demo songs and its manual are theirs, not
-# ours, and the manual says outright that it may not be redistributed. None of
-# it belongs in a public repository. Supply your own copy from
-# VocalWriter2.0.dmg; the README says where the files go.
-assets/
+# VocalWriter 2.0.1's data files are in this repository, so that a clone runs.
+# They are KAE Labs' software, 2005, not ours and not under our licence -- see
+# NOTICE. Four of them are what the program needs:
+#
+#   assets/EnglishLex                            the dictionary
+#   assets/GMSpeech.rsrc                         the voices
+#   assets/VocalWriter.app/.../VocalWriter.rsrc  the engine's tables
+#   assets/VocalWriter.app/.../MacOS/VocalWriter the PowerPC binary, which the
+#                                                interpreter and the C engine's
+#                                                differential tests read
+#
+# The rest of the application -- the demo songs, the manual, the tutorial, the
+# instrument bank -- is not needed to run it and is not here.
+assets/*
+!assets/EnglishLex
+!assets/GMSpeech.rsrc
+!assets/License Agreement.rtf
+!assets/VocalWriter.app/
+assets/VocalWriter.app/*
+!assets/VocalWriter.app/Contents/
+assets/VocalWriter.app/Contents/*
+!assets/VocalWriter.app/Contents/MacOS/
+assets/VocalWriter.app/Contents/MacOS/*
+!assets/VocalWriter.app/Contents/MacOS/VocalWriter
+!assets/VocalWriter.app/Contents/Resources/
+assets/VocalWriter.app/Contents/Resources/*
+!assets/VocalWriter.app/Contents/Resources/VocalWriter.rsrc
+
+# Their manual, which says in as many words that it may not be redistributed.
 docs/manual.txt
 
 # Audio rendered by VocalWriter itself, kept as the ground truth everything is
@@ -19,6 +42,7 @@ out/
 # What the build makes
 build/
 dist/
+lib/
 *.egg-info/
 
 # Built, not written. The compiled core is made by `python -m ppc.build_core`
@@ -27,9 +51,7 @@ dist/
 *.pyd
 *.so
 *.dylib
-# cffi generates these beside the extension it builds
-ppc/_ppccore.c
-ppc/_ppccore.o
+ppc/_ppccore.c          # cffi writes this beside the core
 __pycache__/
 *.py[cod]
 

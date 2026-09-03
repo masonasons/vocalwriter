@@ -21,7 +21,7 @@ from ppc.cpu import CPU, Memory                     # noqa: E402
 
 try:                                                 # the compiled core, if built
     from ppc import fastcpu
-    FAST = fastcpu.AVAILABLE
+    FAST = fastcpu.AVAILABLE and not os.environ.get('VW_PURE_CPU')
 except ImportError:
     fastcpu = None
     FAST = False
@@ -34,7 +34,15 @@ RSRC = paths.asset('assets', 'VocalWriter.app', 'Contents', 'Resources',
                    'VocalWriter.rsrc')
 
 HEAP_BASE = 0x20000000
-STACK_TOP = 0x30000000
+#: Where the guest's stack goes. Mac OS X put the main thread's just under
+#: 0xC0000000, and that is not an arbitrary choice here: `SayFrame` reads one
+#: local before assigning it, so what it gets is a saved stack pointer left
+#: there by whichever call ran last at that depth, and the *sign* of that word
+#: decides a branch in the breath. A stack at 0x30000000 is a positive number
+#: and takes the other branch. It differs by up to 3% of full scale on voices
+#: that use breath, and it was wrong until the C engine -- which matches
+#: VocalWriter's own exported audio sample for sample -- disagreed with it.
+STACK_TOP = 0xC0000000
 
 
 class Machine(object):

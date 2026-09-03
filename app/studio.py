@@ -1343,9 +1343,9 @@ class Frame(wx.Frame):
         self.messages.AppendText(text + '\n')
 
     def _ready(self, info):
-        self.say('engine ready, %s %s'
-                 % ('PyPy' if info.get('pypy') else 'CPython',
-                    info.get('python', '')))
+        info = info or {}
+        self.say('engine ready: %s, Python %s'
+                 % (info.get('engine', 'unknown'), info.get('python', '')))
 
     def _set_voices(self, names):
         seen, uniq = set(), []
@@ -2464,12 +2464,6 @@ class Frame(wx.Frame):
 
 
 def main():
-    # A frozen build ships one executable: with --engine it is the synthesis
-    # process the window talks to, and without it, the window.
-    if '--engine' in sys.argv:
-        from ppc.server import main as engine_main
-        engine_main()
-        return
     missing = paths.missing()
     app = wx.App(False)
     if missing:

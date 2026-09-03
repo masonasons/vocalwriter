@@ -1,11 +1,10 @@
 # Build the editor for Windows and macOS on every push, and keep one rolling
 # `latest` release holding the newest of each.
 #
-# The builds carry none of VocalWriter 2.0: its binary, dictionary and voice
-# bank are KAE Labs' software and are not in this repository, so they cannot be
-# in anything built from it. `ppc/paths.py` looks for an `assets` folder beside
-# the executable, and the program says exactly what is missing on startup if it
-# is not there.
+# Two things are built: the synthesiser, which is C (the `engine` submodule),
+# and the editor around it, which is Python packaged with PyInstaller. The
+# builds carry VocalWriter 2.0.1's own data files, as this repository does --
+# they are KAE Labs' work and not covered by our licence; see NOTICE.
 name: build
 
 on:
@@ -38,6 +37,8 @@ jobs:
             asset: VocalWriterStudio-macos-arm64
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true       # the synthesiser
 
       - uses: actions/setup-python@v5
         with:
@@ -48,15 +49,46 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install numpy cffi setuptools wxPython pyinstaller
 
-      - name: Compile the core
-        run: python -m ppc.build_core
-
-      # The compiled core is the difference between a render taking a minute
-      # and taking an hour, and when it fails to import everything falls back
-      # to the Python interpreter silently. Fail the build instead.
-      - name: The core must actually load
+      # The Windows runners carry MSYS2's mingw-w64 GCC but do not put it on
+      # the path. Clang on macOS needs nothing.
+      - name: Find a C compiler (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
         run: |
-          python -c "from ppc import fastcpu; d = fastcpu.describe(); print(d); assert d.startswith('compiled'), d"
+          for d in /c/msys64/mingw64/bin /c/msys64/ucrt64/bin /c/ProgramData/mingw64/mingw64/bin /c/mingw64/bin; do
+            if [ -x "$d/gcc.exe" ]; then echo "$d" >> "$GITHUB_PATH"; echo "gcc: $d"; exit 0; fi
+          done
+          echo "no mingw gcc found; what is here:"; ls /c | head -40; exit 1
+
+      - name: Build the synthesiser
+        shell: bash
+        run: |
+          sh engine/build.sh
+          ls -l engine/build/libvocalwriter.*
+
+      # The whole program is that library. If it will not load there is
+      # nothing to ship, and a build that packages anyway is worse than one
+      # that stops here.
+      - name: The synthesiser must load and sing
+        shell: bash
+        run: |
+          python - <<'PY'
+          from ppc import cengine, render
+          from ppc.engine import Engine
+          print(cengine.describe())
+          assert cengine.available(), cengine.REASON
+          eng = Engine()
+          print(eng.ping())
+          print('voices:', ', '.join(eng.voices()[:4]))
+          print('daisy:', eng.phonemes(['daisy']))
+          song = {'bpm': 100, 'tracks': [{'program': 0, 'volume': 1.0,
+                  'pan': 0.0, 'notes': [
+                      {'pitch': 67, 'beats': 1.0, 'phonemes': ['d', 'EY']},
+                      {'pitch': 65, 'beats': 1.0, 'phonemes': ['z', 'IY']}]}]}
+          res = eng.render(song, 'ci-check.wav')
+          print('rendered %.2f s' % res['seconds'])
+          assert res['seconds'] > 1.0
+          PY
 
       - name: Package
         run: pyinstaller --noconfirm VocalWriterStudio.spec

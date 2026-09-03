@@ -1,31 +1,46 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller build.
 
+    sh engine/build.sh              # the synthesiser
     pyinstaller VocalWriterStudio.spec
 
-Produces `dist/VocalWriterStudio/`, a folder to zip and send. One executable
-serves as both the window and, re-run with --engine, the synthesis process.
+Produces `dist/VocalWriterStudio/`, a folder to zip and send.
 
-VocalWriter's own files are included, so the build runs as it stands. They
-remain KAE Labs' software. An `assets` folder placed beside the executable
-still takes precedence over the built-in copy, so a recipient can substitute
-their own.
+The synthesis is VocalWriter's own code recreated in C (the `engine`
+submodule, github.com/masonasons/VocalWriterC), loaded as a shared library.
+It has to be built first; this refuses to package a program that cannot make
+a sound.
+
+VocalWriter's own data files are included where they are present, so the build
+runs as it stands. They remain KAE Labs' software. An `assets` folder placed
+beside the executable still takes precedence over the built-in copy, so a
+recipient can substitute their own.
 """
 import os
 import sys
 
 block_cipher = None
 
-# The compiled core is named for the interpreter that built it. Take only the
-# one this interpreter can load -- a build for another runtime is dead weight
-# and only confuses the picture if the right one fails to import.
-import importlib.machinery
-suffixes = tuple(importlib.machinery.EXTENSION_SUFFIXES)
-core = [(os.path.join('ppc', f), 'ppc')
-        for f in os.listdir('ppc')
-        if f.startswith('_ppccore') and f.endswith(suffixes)]
-if not core:
-    raise SystemExit('build the core first: python -m ppc.build_core')
+# The synthesiser. Everything the program does with sound goes through it,
+# so a build without it is not worth making.
+LIB = {'win32': 'libvocalwriter.dll',
+       'darwin': 'libvocalwriter.dylib'}.get(sys.platform, 'libvocalwriter.so')
+lib = None
+for where in (os.path.join('lib', LIB),
+              os.path.join('engine', 'build', LIB),
+              os.path.join('..', 'VocalWriterC', 'build', LIB)):
+    if os.path.isfile(where):
+        lib = [(where, 'lib')]
+        break
+if lib is None:
+    raise SystemExit(
+        'the synthesiser is not built: run `sh engine/build.sh` first '
+        '(git submodule update --init, if the submodule is empty)')
+
+# The PowerPC interpreter is not in the build. It is what the C engine was
+# checked against and it is still in the repository, but nothing here runs on
+# it: it renders about a thousandth as fast.
+core = []
 
 # The four VocalWriter files that actually make the sound go in as one zip,
 # not as loose files. One of them is a PowerPC Mach-O executable, and
@@ -57,17 +72,23 @@ else:
 a = Analysis(
     ['launch.py'],
     pathex=[os.path.abspath('.')],
-    binaries=core,
+    binaries=core + lib,
     datas=data,
     # _cffi_backend is cffi's runtime. Nothing imports it in Python source --
-    # the compiled module needs it at load time -- so it has to be named here
-    # or the core fails to import and everything silently falls back to the
-    # Python interpreter, which is fifty times slower.
-    hiddenimports=['ppc._ppccore', '_cffi_backend'],
+    # cffi reaches for it when the library is opened -- so it has to be named
+    # here or there is no synthesiser at all.
+    hiddenimports=['_cffi_backend'],
     hookspath=[],
     runtime_hooks=[],
+    # The interpreter and its compiled core are excluded by name. They
+    # are still in the repository -- they are what the C engine was
+    # checked against -- but a build has no use for something that
+    # renders a thousand times slower, and PyInstaller picks the
+    # extension module up from the source tree if it is not told.
     excludes=['matplotlib', 'scipy', 'capstone', 'PIL', 'tkinter',
-              'pytest', 'setuptools'],
+              'pytest', 'setuptools',
+              'ppc._ppccore', 'ppc.fastcpu', 'ppc.cpu', 'ppc.image',
+              'ppc.synth', 'ppc.lexicon_ppc'],
     cipher=block_cipher,
     noarchive=False,
 )

@@ -18,7 +18,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ppc.lexicon import Lexicon                              # noqa: E402
+from ppc.lexicon import open_lexicon                         # noqa: E402
 from ppc.midi import syllable_lengths                        # noqa: E402
 from ppc.render import (SAMPLE_RATE, Note, Renderer,         # noqa: E402
                         write_wav)
@@ -50,7 +50,7 @@ class Singer(object):
     VELOCITY = 64
 
     def __init__(self, program=0, bpm=120, velocity=VELOCITY):
-        self.lex = Lexicon()
+        self.lex = open_lexicon()
         self.program = program
         self.bpm = bpm
         self.velocity = velocity

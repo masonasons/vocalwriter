@@ -3,16 +3,26 @@ Third-party notice
 
 The MIT licence in LICENSE covers only the work in this repository: the
 PowerPC interpreter, the file-format parsers, the analysis, and VocalWriter
-Studio.
+Studio. The synthesiser in the `engine` submodule carries its own notice of
+the same kind.
 
-It does not cover VocalWriter itself, and none of VocalWriter is distributed
-here.
+It does not cover VocalWriter itself, and VocalWriter's own data files are
+distributed here:
 
-VocalWriter 2.0.1, its EnglishLex dictionary, its GMSpeech voice bank, its
-demo songs and its user manual are Copyright (c) 2005 KAE Labs, all rights
+    assets/EnglishLex                              the dictionary
+    assets/GMSpeech.rsrc                           the voice bank
+    assets/VocalWriter.app/.../VocalWriter.rsrc    the engine's tables
+    assets/VocalWriter.app/.../MacOS/VocalWriter   the PowerPC binary
+    assets/License Agreement.rtf                   their licence
+
+VocalWriter 2.0.1 and those files are Copyright (c) 2005 KAE Labs, all rights
 reserved. VocalWriter, VocalTracks and Resonant Articulatory Synthesis (RAS)
-are trademarks of KAE Labs.
+are trademarks of KAE Labs. They are included so that this program runs as it
+stands, and they remain theirs: nothing here grants any right to them, and
+their own licence agreement is beside them.
 
-Running anything here needs your own copy of that software; the README says
-where the files go. This is an interoperability and preservation project, not
-affiliated with or endorsed by KAE Labs.
+This is an interoperability and preservation project for software that has not
+been sold or supported since the PowerPC Macintosh it ran on. It is not
+affiliated with or endorsed by KAE Labs. If KAE Labs or a successor in
+interest would rather these files were not here, say so and they will be
+removed.

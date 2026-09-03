@@ -126,6 +126,145 @@ class VocalWriter(object):
         return self.m.mem.read(rec + 1, n).decode('mac-roman', 'replace')
 
 
+#: Fields of the speech context the driver reads or writes, by the name the
+#: engine's own debug records give them. The C engine reads them by name too,
+#: which is why the two drivers can be the same code.
+CTX_STATE = 0x1050          # speakState: 3 when the phrase is over
+CTX_WAIT = 0x10ba           # freezeFrame: it is waiting to be given a note
+CTX_OUT_POS = 0x1080        # waveIndex, in halfwords
+CTX_VOICE_IDX = 0x1088      # voiceRef
+CTX_HF_EMPH = 0xcee         # hfEmph: zero for a voice with no shelf
+CTX_EMPH_A = 0xcf4          # the coefficient the shelf is tilted by
+CTX_EMPH_B = 0xcf0          # and 2 - a
+CTX_SPEECH_VOL = 0xfbc      # speechVolume, the factor on the voiced branch
+G_TEMPO_SCALE = 0x3274      # tempoMul
+
+
+class Editor(object):
+    """One voice under the interpreter, driven a frame at a time.
+
+    The same surface `ppc.cengine.Editor` presents over the C engine. This one
+    is forty to a few hundred times slower and is what the other is measured
+    against; nothing else about them differs.
+    """
+
+    #: the interpreter's memory is the PowerPC's, so its halfwords are too
+    dtype = '>i2'
+
+    def __init__(self, rsrc=None, gmspeech=None):
+        # `rsrc` is not taken: the interpreter finds the binary and its
+        # resources through ppc/paths.py, as it always has.
+        self.vw = VocalWriter(gmspeech or GMSPEECH)
+        self.m = self.vw.m
+
+    def close(self):
+        pass
+
+    # -- setting up --------------------------------------------------------
+
+    def tempo_scale(self, mul):
+        self.m.mem.wf32(self.vw.g + G_TEMPO_SCALE, mul)
+
+    def tempo(self, bpm):
+        self.m.call('SetTempo', self.vw.g, int(bpm))
+
+    def program(self, prog):
+        self.vw.program(int(prog))
+
+    def sequence(self, blob):
+        seq = self.m.alloc(len(blob), zero=False)
+        self.m.mem.write(seq, blob)
+        # PgmChange picks the voice; SetSeqAddr would override it from the
+        # sequence's own voice key, so put it back afterwards
+        voice = self.m.mem.r16(self.vw.ctx + CTX_VOICE_IDX)
+        self.m.call('SetSeqAddr', self.vw.ctx, seq)
+        self.m.mem.w16(self.vw.ctx + CTX_VOICE_IDX, voice)
+
+    def start(self):
+        for fn, args in (('InitSay', (self.vw.ctx,)),
+                         ('Init_ControlBlocks', (self.vw.ctx,)),
+                         ('Start_Speech', (self.vw.g, 0)),
+                         ('Sing_Speech', (self.vw.g, 0, 1))):
+            self.m.call(fn, *args)
+
+    def defaults(self, glide=True):
+        self.m.call('InitDefaultVoiceCntrls', self.vw.ctx)
+        if glide:
+            # The glide table, after the defaults on purpose: the engine's own
+            # default portamento is read out of it. See ppc/render.py.
+            self.m.mem.w32(self.vw.ctx + 0x1070,
+                           self.m.mem.r32(self.m.globals_ptr('_g_Time_Tbl')))
+
+    def volume(self, value):
+        self.m.call('Speech_Volume', self.vw.g, 0, int(value))
+        self.m.call('SetTotalVolume', self.vw.ctx)
+
+    def control(self, name, value):
+        self.m.call(name, self.vw.g, 0, int(value) & 0xFFFFFFFF)
+
+    # -- rendering ---------------------------------------------------------
+
+    def note(self, key, next_key, velocity, beats):
+        self.m.call('Speech_Note', self.vw.g, 0, int(key), int(next_key),
+                    int(velocity), floats=(float(beats),))
+
+    def frames(self, count=1):
+        done = 0
+        while done < count:
+            self.m.call('e_Fill_Next_Frame', self.vw.ctx)
+            self.m.call('SayFrame', self.vw.ctx)
+            done += 1
+            if self.state == 3 or self.wants_note:
+                break
+        return done
+
+    @property
+    def state(self):
+        return self.m.mem.r16(self.vw.ctx + CTX_STATE)
+
+    @property
+    def wants_note(self):
+        return self.m.mem.r16(self.vw.ctx + CTX_WAIT)
+
+    @property
+    def wave_index(self):
+        return self.m.mem.r32(self.vw.ctx + CTX_OUT_POS)
+
+    def wave(self):
+        import numpy as np
+        n = self.wave_index
+        return np.frombuffer(self.m.mem.read(self.vw.outbuf, n * 2),
+                             dtype=self.dtype).astype(np.float32)
+
+    # -- the radiation shelf -----------------------------------------------
+
+    @property
+    def hf_emph(self):
+        return self.m.mem.r16(self.vw.ctx + CTX_HF_EMPH)
+
+    @property
+    def emphasis(self):
+        return (self.m.mem.rf32(self.vw.ctx + CTX_EMPH_A),
+                self.m.mem.rf32(self.vw.ctx + CTX_EMPH_B))
+
+    @emphasis.setter
+    def emphasis(self, ab):
+        a, b = ab
+        self.m.mem.wf32(self.vw.ctx + CTX_EMPH_A, a)
+        self.m.mem.wf32(self.vw.ctx + CTX_EMPH_B, b)
+
+    @property
+    def speech_volume(self):
+        return self.m.mem.rf32(self.vw.ctx + CTX_SPEECH_VOL)
+
+    @speech_volume.setter
+    def speech_volume(self, v):
+        self.m.mem.wf32(self.vw.ctx + CTX_SPEECH_VOL, v)
+
+    def voice_name(self):
+        return self.vw.voice_name()
+
+
 if __name__ == '__main__':
     vw = VocalWriter()
     print('tables at 0x%x, globals 0x%x, context 0x%x'

@@ -38,8 +38,43 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ppc.synth import VocalWriter                              # noqa: E402
+from ppc import cengine                                       # noqa: E402
 from tools.ttvi import durations, load, phoneme_order          # noqa: E402
+
+
+def open_engine():
+    """The engine a render runs on.
+
+    It is KAE Labs' own code either way. The C engine is that code lifted from
+    the PowerPC binary and checked against the interpreter -- every field of
+    the context after every frame, and every sample -- and against the audio
+    VocalWriter itself exported on a Macintosh, which it matches exactly. It
+    is what renders here.
+
+    The interpreter in `ppc/synth.py` is still in this repository, because it
+    is what the C engine is measured against and what the analysis was done
+    with. Nothing in the editor runs on it any more: it renders about a
+    thousandth as fast, which is the whole reason for the other one.
+
+    `VOCALWRITER_ENGINE=interpreter` still asks for it, for comparing the two.
+    """
+    if os.environ.get('VOCALWRITER_ENGINE', '').lower() in (
+            'interpreter', 'ppc', 'python'):
+        from ppc.synth import Editor as Interpreter   # imported only if asked
+        return Interpreter()
+    if not cengine.available():
+        raise RuntimeError(
+            'the synthesiser library is missing: %s.\n'
+            'It is built from the VocalWriterC project (sh build.sh) and '
+            'belongs beside this program.' % cengine.REASON)
+    return cengine.Editor()
+
+
+def engine_name():
+    if os.environ.get('VOCALWRITER_ENGINE', '').lower() in (
+            'interpreter', 'ppc', 'python'):
+        return 'PowerPC interpreter (asked for)'
+    return cengine.describe()
 
 SAMPLE_RATE = 44100
 FRAMES_PER_SEC = 200.45
@@ -196,32 +231,18 @@ class Renderer(object):
     # -- rendering ---------------------------------------------------------
 
     def _setup(self, notes, program=None):
-        """Build the engine state a render runs on; returns the VocalWriter."""
-        vw = VocalWriter()
-        m = vw.m
-        m.mem.wf32(vw.g + G_TEMPO_SCALE, TEMPO_SCALE)
-        m.call('SetTempo', vw.g, int(self.bpm))
-
+        """Build the engine state a render runs on; returns the engine."""
+        eng = open_engine()
+        eng.tempo_scale(TEMPO_SCALE)
+        eng.tempo(int(self.bpm))
         blob, _n = self._sequence(notes)
-        seq = m.alloc(len(blob), zero=False)
-        m.mem.write(seq, blob)
+        eng.program(self.program if program is None else program)
+        eng.sequence(blob)
+        eng.start()
+        self._voice_controls(eng)
+        return eng
 
-        # PgmChange picks the voice; SetSeqAddr would override it from the
-        # sequence's own voice key, so put it back afterwards
-        vw.program(self.program if program is None else program)
-        voice = m.mem.r16(vw.ctx + CTX_VOICE_IDX)
-        m.call('SetSeqAddr', vw.ctx, seq)
-        m.mem.w16(vw.ctx + CTX_VOICE_IDX, voice)
-
-        for fn, args in (('InitSay', (vw.ctx,)),
-                         ('Init_ControlBlocks', (vw.ctx,)),
-                         ('Start_Speech', (vw.g, 0)),
-                         ('Sing_Speech', (vw.g, 0, 1))):
-            m.call(fn, *args)
-        self._voice_controls(vw)
-        return vw
-
-    def _voice_controls(self, vw):
+    def _voice_controls(self, eng):
         """Controls that Start_Speech and PgmChange leave zeroed.
 
         Without the first, ctx[0x10bc]/[0x10c0] -- the weights that mix the two
@@ -230,80 +251,64 @@ class Renderer(object):
         target collapses the same way. Either leaves the fricatives audible and
         the vowels silent.
         """
-        m = vw.m
-        m.call('InitDefaultVoiceCntrls', vw.ctx)
-        # The glide table. `InitGlobals_Speech` copied g[0x2e9c] into
-        # ctx[0x1070] long before there was a table there -- the application
-        # fills that global in `Synth_Startup` -- so point the context at the
-        # one `InitSharedTables` loaded.
-        #
-        # After the defaults on purpose. The engine's own default portamento
-        # is read out of this same table, so wiring it any earlier would put a
-        # glide on every note of every song ever rendered here. VocalWriter's
-        # own renders do not glide -- measured against them, note change for
-        # note change -- so the default stays what it has always been: nothing
-        # in ctx[0x1060], and a note steps straight to its pitch.
-        m.mem.w32(vw.ctx + CTX_GLIDE_TBL,
-                  m.mem.r32(m.globals_ptr('_g_Time_Tbl')))
-        m.call('Speech_Volume', vw.g, 0, 127)
-        m.call('SetTotalVolume', vw.ctx)
+        # The glide table is wired after the defaults on purpose. The
+        # engine's own default portamento is read out of it, so wiring it any
+        # earlier would put a glide on every note of every song rendered here.
+        # VocalWriter's own renders do not glide -- measured against them,
+        # note change for note change -- so the default stays what it has
+        # always been: a note steps straight to its pitch.
+        eng.defaults(glide=True)
+        eng.volume(127)
         # Only what has been moved off its default, so an unset control is
         # left exactly as the engine had it rather than re-stated slightly
         # differently through a 0-127 knob.
         for key, call, default, _lo, _hi, _label, _hint in VOICE_CONTROLS:
             value = self.voice.get(key, default)
             if value != default:
-                m.call(call, vw.g, 0, int(value) & 0xFFFFFFFF)
-        if self.brightness is not None and m.mem.r16(vw.ctx + 0xcee):
-            a0 = m.mem.rf32(vw.ctx + RAD_A)
+                eng.control(call, value)
+        if self.brightness is not None and eng.hf_emph:
+            a0, _b0 = eng.emphasis
             a = a0 * self.brightness
-            m.mem.wf32(vw.ctx + RAD_A, a)
-            m.mem.wf32(vw.ctx + RAD_B, 2.0 - a)
+            eng.emphasis = (a, 2.0 - a)
             # The shelf's DC gain is 2.5 - 2a, so tilting it also changes how
             # loud everything is -- by nearly four times at the calibrated
             # setting, which clips inside the engine. Compensate through the
             # engine's own volume so brightness only changes tone.
             dc0, dc = 2.5 - 2.0 * a0, 2.5 - 2.0 * a
             if dc > 1e-6 and dc0 > 1e-6:
-                vol = m.mem.rf32(vw.ctx + G_TOTAL_VOL) * (dc0 / dc)
-                m.mem.wf32(vw.ctx + G_TOTAL_VOL, vol)
+                eng.speech_volume = eng.speech_volume * (dc0 / dc)
 
-    def _samples(self, vw):
-        halfwords = vw.m.mem.r32(vw.ctx + CTX_OUT_POS)
-        raw = np.frombuffer(vw.m.mem.read(vw.outbuf, halfwords * 2),
-                            dtype='>i2').astype(np.float32)
+    def _samples(self, eng):
+        raw = eng.wave()
         # SayFrame writes groups of four halfwords as [L0, L1, R0, R1] -- two
         # samples per channel, not two interleaved frames. Taking every second
         # halfword splices the left channel onto a copy of itself and destroys
         # the period, which sounds exactly like a voice with no pitch.
         return np.stack([raw[0::4], raw[1::4]], axis=1).ravel() / 32768.0
 
-    def _note_call(self, vw, note):
+    def _note_call(self, eng, note):
         """Speech_Note(g, chan, note, ?, velocity, beats).
 
         The velocity is the *fifth* integer: it lands in ctx[0x1000], which
         DoNote turns into the note amplitude ctx[0x10c4], and SaveFrame copies
         into the frame as the factor the whole voiced branch is scaled by.
         """
-        vw.m.call('Speech_Note', vw.g, 0, note.midi, 0, note.velocity,
-                  floats=(note.beats,))
+        eng.note(note.midi, 0, note.velocity, note.beats)
 
     def render(self, notes):
-        vw = self._setup(notes)
-        m = vw.m
+        eng = self._setup(notes)
         pending = list(notes)
-        self._note_call(vw, pending.pop(0))
-        r16 = lambda o: m.mem.r16(vw.ctx + o)
-        for _ in range(MAX_FRAMES):
-            m.call('e_Fill_Next_Frame', vw.ctx)
-            m.call('SayFrame', vw.ctx)
-            if r16(CTX_STATE) == 3:
+        self._note_call(eng, pending.pop(0))
+        frames = 0
+        while frames < MAX_FRAMES:
+            frames += eng.frames(MAX_FRAMES - frames)
+            if eng.state == 3:
                 break
-            if r16(CTX_WAIT):               # the engine is asking for a note
+            if eng.wants_note:              # the engine is asking for a note
                 if not pending:
                     break
-                self._note_call(vw, pending.pop(0))
-        return self._samples(vw)
+                self._note_call(eng, pending.pop(0))
+        return self._samples(eng)
 
     def render_live(self, notes, starts, events, bpm, verbose=False,
                     mark=None):
@@ -317,9 +322,7 @@ class Renderer(object):
         `mark` is a list the sample offset of each note is appended to, so a
         caller rendering lead-in context can find where the real audio starts.
         """
-        vw = self._setup(notes)
-        m = vw.m
-        r16 = lambda o: m.mem.r16(vw.ctx + o)
+        eng = self._setup(notes)
         queue = list(zip(notes, starts))
         ev, ei = list(events), 0
         current_program = self.program
@@ -327,10 +330,10 @@ class Renderer(object):
         def feed():
             note, tick = queue.pop(0)
             if mark is not None:
-                # ctx[0x1080] counts halfwords, four per pair of mono samples
-                mark.append(m.mem.r32(vw.ctx + CTX_OUT_POS) // 2)
-            m.call('SetTempo', vw.g, max(10, min(250, int(round(bpm(tick))))))
-            self._note_call(vw, note)
+                # waveIndex counts halfwords, four per pair of mono samples
+                mark.append(eng.wave_index // 2)
+            eng.tempo(max(10, min(250, int(round(bpm(tick))))))
+            self._note_call(eng, note)
 
         feed()
         frames = 0
@@ -340,33 +343,31 @@ class Renderer(object):
                 _t, kind, val = ev[ei]
                 ei += 1
                 if kind == 'bend':
-                    m.call('Speech_PitchBend', vw.g, 0,
-                           (val * BEND_SCALE) & 0xFFFFFFFF)
+                    eng.control('Speech_PitchBend', val * BEND_SCALE)
                 elif kind == 'sens':
-                    m.call('Speech_PBSens', vw.g, 0, val)
+                    eng.control('Speech_PBSens', val)
                 elif kind == 'program' and val != current_program:
                     # Reloading the voice rebuilds the wavetables and filter
                     # coefficients but leaves the resonator delay lines holding
                     # the old voice's state, so only do it when the program
                     # actually changes. The export re-sends the program it is
                     # already on, and honouring that destabilises the cascade.
-                    m.call('PgmChange_Speech', vw.g, 0, val)
-                    self._voice_controls(vw)
+                    eng.program(val)
+                    self._voice_controls(eng)
                     current_program = val
-            m.call('e_Fill_Next_Frame', vw.ctx)
-            m.call('SayFrame', vw.ctx)
+            eng.frames(1)
             frames += 1
             if verbose and frames % 400 == 0:
                 print('   %6.1f s rendered, %d notes left'
                       % (frames * SAMPLES_PER_FRAME / float(SAMPLE_RATE),
                          len(queue)), flush=True)
-            if r16(CTX_STATE) == 3:
+            if eng.state == 3:
                 break
-            if r16(CTX_WAIT):
+            if eng.wants_note:
                 if not queue:
                     break
                 feed()
-        return self._samples(vw)
+        return self._samples(eng)
 
 
 def write_wav(path, y, sr=SAMPLE_RATE):

@@ -18,22 +18,24 @@ distinct opcodes, and essentially no calls outside itself. Running that is both
 less work and exactly faithful.
 
 ```
-ppc/      the interpreter and the driver
-            cpu.py     32-bit big-endian PowerPC, user mode
+ppc/      the engine as this program drives it
+            cengine.py the C synthesiser, which is what renders
+            render.py  notes in, samples out
+            engine.py  what the editor asks: pronunciations and audio
+            midi.py    sings a VocalWriter MIDI export
+            cpu.py     32-bit big-endian PowerPC, user mode -- the reference
             image.py   loads the Mach-O and calls into it
             synth.py   builds the memory the engine expects
-            render.py  notes in, samples out
-            server.py  the engine process the editor talks to
-            midi.py    sings a VocalWriter MIDI export
 app/      VocalWriter Studio, the editor
+engine/   the synthesiser in C, as a submodule (VocalWriterC)
+assets/   VocalWriter 2.0.1's data files (see below)
 tools/    format parsers (machrsrc, machsyms, ttvi, smf, trk) and ppcdis
 docs/     ENGINE.md -- what the engine does; FORMATS.md -- the file formats
 ```
 
-and, not in this repository, three directories you make yourself:
+and two directories you make yourself:
 
 ```
-assets/   VocalWriter 2.0.1 and its data (see below)
 emu/out/  reference audio rendered by VocalWriter itself, for comparison
 out/      rendered audio
 ```
@@ -46,71 +48,40 @@ none of VocalWriter -- see below -- so they need a copy of the files put beside
 them; the tagged releases on the [releases page](../../releases) are the ones
 built with the files in place, which run as they stand.
 
-## What you have to supply
+## What is here
 
-**This repository contains none of VocalWriter.** It is the work of KAE Labs,
-2005, and is still theirs: the PowerPC binary, the `EnglishLex` dictionary, the
-`GMSpeech` voice bank, the demo songs and the manual are all under their
-licence, and the manual says in as many words that it may not be redistributed.
-So none of it is here, and nothing here will make a sound without it.
-
-What is here is the interpreter that runs their code, the analysis of their
-formats, and an editor built on top. That part is ours.
-
-To hear anything, get `VocalWriter2.0.dmg` yourself and put its contents in an
-`assets/` directory beside this one, resource forks preserved as `.rsrc`
-sidecars -- `ppc/paths.py` lists exactly what is looked for and where. Four
-files actually make the sound:
+VocalWriter 2.0.1's own data files are in this repository, so a clone runs:
 
 ```
-assets/EnglishLex
-assets/GMSpeech.rsrc
-assets/VocalWriter.app/Contents/MacOS/VocalWriter
-assets/VocalWriter.app/Contents/Resources/VocalWriter.rsrc
+assets/EnglishLex                              the dictionary
+assets/GMSpeech.rsrc                           the voices
+assets/VocalWriter.app/.../VocalWriter.rsrc    the engine's tables
+assets/VocalWriter.app/.../MacOS/VocalWriter   the PowerPC binary
 ```
 
-The one piece of extracted data that *is* here is
-`emu/phoneme_palette.json`: fifty phoneme symbols with an example word for
-each, of the "AE as in bAt" sort that every phonetics textbook prints. It is
-what lets the phoneme picker say what a symbol sounds like. Delete it and the
-program still runs, with the examples missing.
+They are the work of KAE Labs, 2005, and are still theirs -- not covered by
+this project's licence. See [NOTICE](NOTICE). Everything else of the
+application -- the demo songs, the tutorial, the manual, the instrument bank
+-- is not needed to run this and is not here.
 
-## Setup
-
-The synthesiser runs on a compiled core. **Build it once per interpreter:**
+The synthesis itself is in the `engine` submodule
+([VocalWriterC](https://github.com/masonasons/VocalWriterC)): VocalWriter's
+own PowerPC code, lifted into C function by function and checked against the
+original until every sample agrees. Build it once:
 
 ```bash
-python -m ppc.build_core          # needs cffi, and a C compiler
-pypy3.11 -m ppc.build_core        # if you have PyPy as well
+git submodule update --init
+sh engine/build.sh
 ```
 
-`ppc/cpu.py` is a complete PowerPC interpreter in Python and stays the
-reference -- it is what was debugged against VocalWriter's own output, and it
-is used automatically wherever the extension has not been built. `ppc/core.c`
-makes the same decisions in C, and the two agree **sample for sample**: a full
-render of the Daisy vocal is byte-identical either way.
+That produces `engine/build/libvocalwriter.<dll|dylib|so>`, which the editor
+loads. Without it there is no sound and the program says so.
 
-It is worth the build. Measured on the same line of singing:
-
-| | Windows x86-64 | macOS, Apple Silicon |
-|---|---|---|
-| CPython | ~13x slower than real time | — |
-| PyPy | ~5x slower | ~1.4x slower |
-| **compiled core** | **10x faster than real time** | **14x faster** |
-
-The whole 60-second Daisy vocal renders in **1.5 seconds**; before the C core
-it was eight minutes. Python is still what drives it -- setting up the engine's
-memory, feeding it notes, collecting the samples -- and control returns from C
-whenever an address Python has hooked is reached, which is how the allocator,
-libm and the dictionary's file reads are served.
-
-NumPy is needed too (SciPy and Capstone only for the analysis and disassembly
-tools):
-
-```bash
-python -m venv .venv
-.venv/bin/python -m pip install numpy cffi setuptools
-```
+The PowerPC interpreter in `ppc/` is still here and is still the reference the
+C engine is measured against -- it is what the analysis was done with, and
+what VocalWriterC's differential tests compare against, field by field after
+every frame. Nothing in the editor runs on it: it renders about a thousandth
+as fast. `VOCALWRITER_ENGINE=interpreter` asks for it, for comparing the two.
 
 ## The application
 
@@ -189,24 +160,19 @@ Exporting tracks separately gives stems, not separate performances: each file
 carries the volume and the pan it has in the song, so laying them back on top of
 one another reproduces the mix -- measured, and within one 16-bit step.
 
-It runs as two processes. wxPython needs CPython, but a lexicon lookup is a few
-hundred thousand guest instructions and a render is tens of millions, which
-would freeze a window and is slower under CPython besides. So `ppc/server.py`
-holds the engine -- loading the binary, the dictionary and the shared tables
-once -- and runs under PyPy when it can be found, while the window talks to it
-over JSON lines and never blocks.
-
-**Rendering costs about five times the length of the audio on Windows, and
-about a third of that on the Mac**, so the interface is built around avoiding
-it rather than pretending it is fast: "Hear note" renders only the selected
-note, and any render already done comes back from cache instantly. Grouping
-helps too -- a word on one note is a quarter shorter than the same phonemes
-spread over one note each, and therefore a quarter quicker.
+It used to run as two processes, because a render under the interpreter took
+about as long as the music lasts and nothing that slow can happen on the thread
+drawing a window. **The C engine renders a minute of singing in about half a
+second**, so the process boundary and its JSON protocol are gone: the engine is
+imported and called. It still answers on a worker thread, because half a second
+of a frozen window is still a stutter, and finished renders are still cached,
+so playing the same thing twice renders once.
 
 ```
 app/studio.py   the window: notes, phonemes, voices, play
-app/engine.py   finds an interpreter, spawns the engine, marshals requests
-ppc/server.py   the engine process, with the render cache
+app/engine.py   the engine on a worker thread, answering in callbacks
+ppc/engine.py   pronunciations and audio, with the render cache
+ppc/cengine.py  the C synthesiser, loaded through cffi
 ppc/song.py     words + notes -> audio, without a window
 ppc/lexicon.py  words -> phonemes
 ```
@@ -224,8 +190,8 @@ python3 -m venv .venv && ./.venv/bin/python -m pip install numpy scipy capstone
 ./.venv/bin/python -m ppc.midi out/Daisy_export.mid --track HAL -o out/HAL_ppc.wav
 ```
 
-Phrases render in parallel, one process each (`-j` to choose how many), so a
-song takes about as long as its longest phrase rather than the sum of them.
+Phrases render in parallel, one process each (`-j` to choose how many). That
+mattered when a phrase took a minute; it is now about a tenth of a second.
 
 The export carries everything the engine needs — the notes, the phonemes
 VocalWriter derived for each syllable, the tempo map, the program changes and
@@ -277,7 +243,7 @@ Against VocalWriter's own render of the same track:
 | vowel spectrum below 4 kHz (time-aligned) | within **1.5 dB** | — |
 | vowel spectrum above 4 kHz | **-11 dB** (see Known limits) | — |
 | level | rms 2518, peak 14615 | rms 2104, peak 12956 |
-| render time | **11 s** under PyPy (Mac); 1 m 23 s (Windows) | — |
+| render time for 60 s of song | **0.5 s** | — |
 
 Pitch is exact by construction: the phase increment reads as 8.24 fixed point at
 44100 Hz and lands on equal temperament to within a tenth of a percent.
@@ -315,14 +281,14 @@ The cause is not the bends, the coefficients (pole radius 0.9929, exactly
 a fresh engine. Unsolved; the renderer therefore splits a song into phrases at
 rests and starts each on a fresh engine, which also preserves absolute timing.
 
-**Speed.** A 60-second song renders in about 11 seconds under PyPy, roughly
-0.6x real time per phrase, with the phrases running one process each. Under
-CPython the same render takes just over two minutes.
+**Speed.** A 60-second song renders in about half a second. It used to take
+a minute and a half, which is what the phrase-by-phrase machinery and the
+render cache were built around; both are still here, because rests still have
+to be exact and a song still gets played over and over.
 
-Wall time is set by the *longest phrase*, not by the total, so a song with one
-very long phrase leaves most cores idle. Cutting phrases into smaller pieces to
-fix that does not work: the engine carries much more state across a note
-boundary than the filter memory, and rendering 2.5-second pieces on fresh
+Cutting phrases into smaller pieces to spread them over more cores does not
+work, and that has not changed: the engine carries much more state across a
+note boundary than the filter memory, and rendering 2.5-second pieces on fresh
 engines produced audio differing from the correct render by more than the
 signal itself, with 60 dB steps at the joins and plainly audible chopping.
 Discarded lead-in context did not fix it and cost 56% more CPU. `CHUNK_SECONDS`

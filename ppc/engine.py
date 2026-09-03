@@ -1,34 +1,24 @@
 #!/usr/bin/env python3
-"""A long-lived engine process, driven over stdin/stdout with JSON lines.
+"""The engine the editor asks for pronunciations and audio.
 
-The editor needs two things from the engine -- a pronunciation while you type,
-and audio when you press play -- and both are far too slow to do inline. A
-lookup runs a few hundred thousand guest instructions and a render runs tens of
-millions, so under CPython a single word can take the better part of a second.
+It used to be a process of its own, spoken to in JSON lines, because a render
+under the PowerPC interpreter ran tens of millions of guest instructions and
+took about as long as the music lasts -- something that cannot happen on the
+thread drawing the window. The C engine renders a minute of singing in a few
+hundredths of a second, so there is nothing left to put behind a process
+boundary: this is imported and called.
 
-Keeping the engine in its own process solves three problems at once. It loads
-the binary, the dictionary and the shared tables exactly once. It can run under
-PyPy while the interface runs under CPython, which wxPython requires. And a
-render cannot freeze the interface, because the interface is not in this
-process at all.
-
-Protocol: one JSON object per line in, one per line out.
-
-    {"op": "phonemes", "words": ["hello", "there"]}
-    {"op": "render", "song": {...}, "out": "path.wav"}
-    {"op": "preview", "phoneme": "IY", "pitch": 60}
-    {"op": "palette"}
-    {"op": "voices"}
-    {"op": "ping"}
+What it holds is worth holding: the voice bank, the dictionary and the shared
+tables are read once, and rendered audio is kept under a key made from the
+song, so playing the same thing twice renders once.
 """
 import hashlib
-import json
+import json          # only for the cache key
 import math
 import os
 import shutil
 import sys
 import tempfile
-import traceback
 import wave
 
 import numpy as np
@@ -36,11 +26,11 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ppc import paths                                        # noqa: E402
-from ppc.lexicon import Lexicon                              # noqa: E402
+from ppc.lexicon import open_lexicon                         # noqa: E402
 from ppc.midi import syllable_lengths                        # noqa: E402
 from ppc.render import (SAMPLE_RATE, Note, Renderer,         # noqa: E402
                         write_wav)
-from ppc.synth import VocalWriter                            # noqa: E402
+from ppc.render import engine_name, open_engine              # noqa: E402
 from tools.ttvi import load as load_ttvi, phoneme_order      # noqa: E402
 
 
@@ -277,8 +267,13 @@ class Engine(object):
     @property
     def lex(self):
         if self._lex is None:
-            self._lex = Lexicon()
+            self._lex = open_lexicon()
         return self._lex
+
+    def ping(self):
+        """What is running, for the window to say out loud."""
+        return {'engine': engine_name(),
+                'python': '.'.join(str(v) for v in sys.version_info[:3])}
 
     def phonemes(self, words):
         out = {}
@@ -290,11 +285,12 @@ class Engine(object):
     def voices(self):
         """The voice each program number selects, as the bank maps them."""
         if self._voices is None:
-            vw = VocalWriter()
+            eng = open_engine()
             names = []
             for prog in range(16):
-                vw.program(prog)
-                names.append(vw.voice_name())
+                eng.program(prog)
+                names.append(eng.voice_name())
+            eng.close()
             self._voices = names
         return self._voices
 
@@ -502,52 +498,9 @@ class Engine(object):
             return kept
 
 
-def main():
-    eng = Engine()
-    # A windowed build has no console, so the interpreter may hand us no
-    # stdio objects at all even though the parent gave us real pipes. Reopen
-    # the descriptors directly in that case.
-    out = sys.stdout
-    src = sys.stdin
-    if out is None:
-        out = os.fdopen(1, 'w')
-    if src is None:
-        src = os.fdopen(0, 'r')
-    for line in src:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            req = json.loads(line)
-            op = req.get('op')
-            if op == 'ping':
-                from ppc import fastcpu
-                res = {'pypy': hasattr(sys, 'pypy_version_info'),
-                       'python': '.'.join(map(str, sys.version_info[:3])),
-                       'core': fastcpu.describe()}
-            elif op == 'phonemes':
-                res = eng.phonemes(req.get('words', []))
-            elif op == 'voices':
-                res = eng.voices()
-            elif op == 'palette':
-                res = eng.palette()
-            elif op == 'preview':
-                res = eng.preview(req['phoneme'], int(req.get('pitch', 60)),
-                                  int(req.get('program', 0)))
-            elif op == 'render':
-                res = eng.render(req['song'], req['out'])
-            elif op == 'quit':
-                break
-            else:
-                raise ValueError('unknown op %r' % op)
-            reply = {'ok': True, 'id': req.get('id'), 'result': res}
-        except Exception as exc:
-            reply = {'ok': False, 'id': locals().get('req', {}).get('id'),
-                     'error': '%s: %s' % (type(exc).__name__, exc),
-                     'trace': traceback.format_exc()[-800:]}
-        out.write(json.dumps(reply) + '\n')
-        out.flush()
-
-
 if __name__ == '__main__':
-    main()
+    # a quick look at the engine from the command line
+    eng = Engine()
+    print(engine_name())
+    print('voices:', ', '.join(eng.voices()[:6]), '...')
+    print('daisy:', eng.phonemes(['daisy']))

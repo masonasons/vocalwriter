@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Entry point for the packaged application.
-
-One executable does both jobs: with --engine it is the synthesis process, and
-without it, the window. See app/studio.py.
-"""
+"""Entry point for the packaged application. See app/studio.py."""
 import os
 import sys
 
