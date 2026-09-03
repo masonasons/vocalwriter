@@ -51,6 +51,7 @@ else:
                 style=dv.DV_ROW_LINES |
                 (dv.DV_MULTIPLE if multiple else dv.DV_SINGLE))
             self._cols = 0
+            self._key_handler = None
 
         # -- columns and rows ------------------------------------------------
 
@@ -120,4 +121,47 @@ else:
                 event = dv.EVT_DATAVIEW_SELECTION_CHANGED
             elif event is wx.EVT_LIST_ITEM_DESELECTED:
                 event = dv.EVT_DATAVIEW_SELECTION_CHANGED
+            elif event is wx.EVT_KEY_DOWN:
+                # See _on_char_hook: the same handler has to see the contested
+                # combinations earlier than this, or the table acts on them too.
+                self._key_handler = handler
+                super(ReportList, self).Bind(wx.EVT_CHAR_HOOK,
+                                             self._on_char_hook)
             return super(ReportList, self).Bind(event, handler, *args, **kw)
+
+        def _owns_focus(self):
+            w = wx.Window.FindFocus()
+            while w is not None:
+                if w is self:
+                    return True
+                w = w.GetParent()
+            return False
+
+        @staticmethod
+        def _contested(evt):
+            """Keys the native table claims for itself as well.
+
+            An NSTableView treats Option and Command with the arrows as "go to
+            the end of the list". The editor uses those same combinations to
+            transpose a note and to change its length, so both happened at
+            once: a semitone up *and* the cursor thrown to the bottom.
+            """
+            return (evt.GetKeyCode() in (wx.WXK_UP, wx.WXK_DOWN,
+                                         wx.WXK_LEFT, wx.WXK_RIGHT)
+                    and (evt.AltDown() or evt.ControlDown()
+                         or evt.CmdDown()))
+
+        def _on_char_hook(self, evt):
+            """Give the editor first refusal on the contested combinations.
+
+            EVT_KEY_DOWN arrives too late: the control has already acted by
+            then, and not skipping the event does not undo it. EVT_CHAR_HOOK is
+            delivered first, so a handler that takes the key here stops it
+            reaching the table at all. Anything the handler does not want is
+            skipped and carries on as before.
+            """
+            if self._key_handler is None or not self._contested(evt) \
+                    or not self._owns_focus():
+                evt.Skip()
+                return
+            self._key_handler(evt)
