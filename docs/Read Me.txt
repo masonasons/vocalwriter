@@ -1,19 +1,19 @@
-# VocalWriter Studio — getting started
+VocalWriter Studio — getting started
 
-## Running it
+Running it
 
-**Windows.** Unzip the folder anywhere and run `VocalWriterStudio.exe` inside
+Windows. Unzip the folder anywhere and run VocalWriterStudio.exe inside
 it. Keep the folder together. The first time, SmartScreen will stop it:
 choose "More info", then "Run anyway".
 
-**macOS.** Unzip and put `VocalWriter Studio.app` where you want it. Before it
+macOS. Unzip and put VocalWriter Studio.app where you want it. Before it
 will open, run this in Terminal:
 
     xattr -c "/Applications/VocalWriter Studio.app"
 
 Nothing else to install.
 
-## Making a sound
+Making a sound
 
 The window has three things: a list of tracks, a list of notes, and a
 Messages box at the bottom that tells you what happened. Tab moves between
@@ -21,41 +21,41 @@ them, and F6 jumps between the two lists.
 
 You start with one empty track. To put something in it:
 
-1. Press **Ctrl+W**. Type `daisy` and press Enter.
-2. Press **Ctrl+P** to play.
+1. Press Ctrl+W. Type daisy and press Enter.
+2. Press Ctrl+P to play.
 
 That is a word sung on one note. To spread it over two notes, put a hyphen
-where it should divide — `dai-sy` — and set "Notes to use" to 2 in the same
+where it should divide — dai-sy — and set "Notes to use" to 2 in the same
 dialog.
 
 Add more words the same way. Each one goes in after the note you are on, so
 arrow down to the end first if you want it there.
 
-## Changing what you have
+Changing what you have
 
 Move to a note with the arrow keys. Then:
 
-- **Alt+Up** and **Alt+Down** move it a semitone.
-- **Alt+Right** and **Alt+Left** make it a sixteenth note longer or shorter.
-- **Ctrl+H** plays that note on its own, which is quicker than playing the
+- Alt+Up and Alt+Down move it a semitone.
+- Alt+Right and Alt+Left make it a sixteenth note longer or shorter.
+- Ctrl+H plays that note on its own, which is quicker than playing the
   song.
-- **Enter** opens it: the phonemes, the pitch, the length, and the pitch bend.
-- **Delete** removes it.
+- Enter opens it: the phonemes, the pitch, the length, and the pitch bend.
+- Delete removes it.
 
-Pitches can be typed as names — `C4`, `F#3`, `Bb5` — or as numbers.
+Pitches can be typed as names — C4, F#3, Bb5 — or as numbers.
 
-**Ctrl+R** puts in a rest. Rests are worth using: they end a phrase, and the
+Ctrl+R puts in a rest. Rests are worth using: they end a phrase, and the
 program treats each phrase separately, so silences come out the length you
 asked for.
 
-Press **Space** to play from the note you are on, and Space again to stop.
+Press Space to play from the note you are on, and Space again to stop.
 
-If you want to hear each change as you make it, turn on **Ctrl+Shift+P**. Then
+If you want to hear each change as you make it, turn on Ctrl+Shift+P. Then
 nudging a pitch or a length plays that note once you stop.
 
-## Voices
+Voices
 
-Press F6 to get to the tracks list, then **Enter** on the track. That dialog
+Press F6 to get to the tracks list, then Enter on the track. That dialog
 has the voice, the volume, the pan, and the reverb for that part.
 
 There are 87 voices. The ones with people's names sing the way you would
@@ -64,35 +64,35 @@ same synthesiser with a recorded instrument in place of the vocal cords; they
 sing words too, and some of them sit an octave away from the note you wrote,
 which is how they were made.
 
-**Ctrl+T** adds another track, with its own voice and its own notes. **M** and
-**S** on a track mute and solo it.
+Ctrl+T adds another track, with its own voice and its own notes. M and
+S on a track mute and solo it.
 
-## The song as a whole
+The song as a whole
 
-**Ctrl+comma** opens the song settings: the tempo, the time signature, how
+Ctrl+comma opens the song settings: the tempo, the time signature, how
 long the consonants are, the reverb, and the voice controls that every track
 follows unless you give it its own.
 
-## Saving and exporting
+Saving and exporting
 
-- **Ctrl+S** saves the song as a `.vws` file.
-- **Ctrl+Shift+S** writes the whole song to a WAV.
-- **Ctrl+Shift+T** writes one WAV per track.
-- **Ctrl+I** imports a MIDI file. If it has no words in it, every note is
-  given `AA` so you can hear the tune before typing anything.
+- Ctrl+S saves the song as a .vws file.
+- Ctrl+Shift+S writes the whole song to a WAV.
+- Ctrl+Shift+T writes one WAV per track.
+- Ctrl+I imports a MIDI file. If it has no words in it, every note is
+  given AA so you can hear the tune before typing anything.
 
-## If it stops working
+If it stops working
 
 The song is copied automatically a couple of seconds after you change it. If
 the program closes on its own, it offers that copy back the next time you
-start it. The copy is called `recovery.vws` and lives in
-`%APPDATA%\VocalWriter Studio` on Windows, or
-`~/Library/Application Support/VocalWriter Studio` on a Mac.
+start it. The copy is called recovery.vws and lives in
+%APPDATA%\VocalWriter Studio on Windows, or
+~/Library/Application Support/VocalWriter Studio on a Mac.
 
-When it starts it prints a line like `this is build a7f689a 2026-09-03` in the
-Messages box. Quote that if you report a problem.
+When it starts it prints a line in the Messages box that begins "this is
+build". Quote that if you report a problem.
 
-## The keys worth remembering
+The keys worth remembering
 
     Ctrl+W    add a word          Space     play from here, or stop
     Ctrl+N    add a note          Ctrl+P    play from the start
@@ -102,9 +102,7 @@ Messages box. Quote that if you report a problem.
     Alt+Up/Down     pitch         Ctrl+T    add a track
     Alt+Left/Right  length        Ctrl+,    song settings
 
-**F1** reads the full list into the Messages box.
-
----
+F1 reads the full list into the Messages box.
 
 The singing is VocalWriter 2.0.1's own synthesiser, Copyright (c) 2005 KAE
 Labs. The editor is at https://github.com/masonasons/vocalwriter.
