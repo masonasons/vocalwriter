@@ -145,7 +145,7 @@ jobs:
       - name: Zip it up (Windows)
         if: runner.os == 'Windows'
         run: |
-          cp "docs/Read Me.txt" "dist/VocalWriterStudio/Read Me.txt"
+          cp docs/read-me.txt "dist/VocalWriterStudio/Read Me.txt"
           cd dist
           7z a -tzip ${{ matrix.asset }}.zip VocalWriterStudio
 
@@ -157,7 +157,7 @@ jobs:
           cd dist
           mkdir -p "VocalWriter Studio"
           mv "VocalWriter Studio.app" "VocalWriter Studio/"
-          cp "../docs/Read Me.txt" "VocalWriter Studio/Read Me.txt"
+          cp ../docs/read-me.txt "VocalWriter Studio/Read Me.txt"
           ditto -c -k --sequesterRsrc --keepParent "VocalWriter Studio" ${{ matrix.asset }}.zip
 
       - uses: actions/upload-artifact@v4

@@ -12,3 +12,7 @@
 *.aiff binary
 *.mid binary
 *.pyd binary
+
+# The guide ships in the zip as Read Me.txt and is opened by whatever
+# Windows hands a text file to, so it keeps its CRLF.
+*.txt text eol=crlf
