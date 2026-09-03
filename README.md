@@ -178,6 +178,14 @@ anything was settled by measuring rather than by reading their names. Nothing
 is sent to the engine unless it has been moved off the engine's own default, so
 a song that sets none of them renders exactly as it did before they existed.
 
+A MIDI file from anywhere else arrives singing: a note that carries no words
+of its own is given **AA**, the open vowel of "father", so the line can be
+played and listened to before a single word is typed. Where the file does
+carry words, they are looked up -- and note that every program except
+VocalWriter writes the sung word in the MIDI Lyric event, which is what that
+event is for, while VocalWriter writes the word as a Text event and puts the
+phonemes it derived in the Lyric event beside it. Both are read.
+
 Pitch bend belongs to the note and is written as the points it passes through,
 so it survives the note being retimed, transposed or moved. Projects are plain
 JSON (`.vws`); a MIDI import brings in the notes, the lyrics, the tempo, the

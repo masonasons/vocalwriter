@@ -30,6 +30,14 @@ VERSION = 2
 #: two symbols the exports spell differently from the engine's own table
 PALETTE = {'OH': 'O', 'DX': 'DD'}
 
+#: What a note sings when the file says nothing about what to sing. An
+#: ordinary MIDI file has pitches and lengths and no words at all, and a note
+#: with no phonemes in it is a rest -- so importing one used to give a song of
+#: the right shape that made no sound whatever, and every note had to be
+#: filled in by hand before anything could be heard. "AA" is the open vowel of
+#: "father": something to sing the line on, and the obvious thing to replace.
+DEFAULT_PHONEME = 'AA'
+
 #: Pitch bend is kept as semitones, and attached to the note it happens on
 #: rather than to the song. MIDI stores it as a 14-bit number whose meaning
 #: depends on a bend-range setting that can itself change mid-song, which is
@@ -367,6 +375,9 @@ def from_midi(path, track_name=None, rest_beats=0.25, grid=0.25):
     Gaps between notes become rests, so the phrasing survives the trip.
     `rest_beats` is the shortest gap worth keeping; below it the note simply
     runs on to the next, which is how a legato line is written.
+
+    A note that carries neither phonemes nor a word is given `DEFAULT_PHONEME`
+    to sing, so an ordinary MIDI file arrives as a song that can be played.
     """
     midi = MidiFile.from_file(path)
     tracks = [t for t in midi.tracks if t.notes]
@@ -388,8 +399,12 @@ def from_midi(path, track_name=None, rest_beats=0.25, grid=0.25):
             rows.append([['%'], n.pitch, quantise(gap, grid), '', []])
         beats = quantise(max(n.duration, 1) / div, grid)
         word = (n.text or '').strip()
-        ph = ([PALETTE.get(x, x) for x in split_phonemes(n.phonemes)]
-              if n.phonemes else [])
+        if n.phonemes:
+            ph = [PALETTE.get(x, x) for x in split_phonemes(n.phonemes)]
+        elif word:
+            ph = []                      # the lookup will fill it in
+        else:
+            ph = [DEFAULT_PHONEME]
         span = max(n.duration, 1)
         rows.append([ph, n.pitch, beats, word,
                      _bend_over(curve, n.tick, n.tick + span)])

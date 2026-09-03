@@ -2575,6 +2575,10 @@ class Frame(wx.Frame):
                     '' if len(got) == 1 else 's',
                     sum(len(r) for _n, r, _p in got), round(bpm),
                     project.format_sig(sig)))
+        if not any(pend for _n, _rows, pend in got) and not any(
+                any(row[3] for row in rows) for _n, rows, _p in got):
+            self.say('it carried no words, so every note sings %s. '
+                     'Ctrl+W puts a word on one.' % project.DEFAULT_PHONEME)
         if len(got) > 1:
             self.say('every part is singing in %s. Enter on a track gives it '
                      'its own voice, volume and pan.'
@@ -2601,7 +2605,17 @@ class Frame(wx.Frame):
         got = 0
         for ti, word, indices in pending:
             phones = found.get(word) or []
-            if not phones or ti >= len(rows):
+            if ti >= len(rows):
+                continue
+            if not phones:
+                # a word the dictionary does not know. The note still has a
+                # pitch and a length, so it sings the default vowel rather
+                # than falling silent, and the word stays on it to be seen.
+                for i in indices:
+                    if 0 <= i < len(rows[ti]) and not rows[ti][i][0]:
+                        row = list(rows[ti][i])
+                        row[0] = [project.DEFAULT_PHONEME]
+                        rows[ti][i] = tuple(row)
                 continue
             rows[ti] = project.fill(rows[ti], word, indices, phones)
             got += 1
@@ -2615,8 +2629,8 @@ class Frame(wx.Frame):
         self.say('%d word%s pronounced%s'
                  % (got, '' if got == 1 else 's',
                     '' if not missing else
-                    ', %d not in the dictionary -- those notes are empty'
-                    % missing))
+                    ', %d not in the dictionary -- those notes sing %s until '
+                    'you say otherwise' % (missing, project.DEFAULT_PHONEME)))
 
     def on_close(self, evt):
         if evt.CanVeto() and not self.may_discard('Close'):

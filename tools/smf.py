@@ -173,7 +173,16 @@ class MidiFile(object):
         trk.notes.sort(key=lambda n: (n.tick, n.pitch))
         for n in trk.notes:
             n.text = text_at.get(n.tick, '')
-            n.phonemes = lyric_at.get(n.tick, '')
+            lyric = lyric_at.get(n.tick, '')
+            if n.text:
+                # VocalWriter writes both: the word as text, the phonemes it
+                # derived for it as the lyric
+                n.phonemes = lyric
+            else:
+                # Everyone else writes the sung word in the Lyric event, which
+                # is what that event is for. Read as phonemes it comes out as
+                # one phoneme per letter -- "dai-" sung as d, a, i.
+                n.text, n.phonemes = lyric, ''
         return trk
 
 
