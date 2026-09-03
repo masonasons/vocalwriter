@@ -2300,6 +2300,11 @@ class Frame(wx.Frame):
             # getting quieter with no explanation is worse than the clipping
             loud = ', the tracks added up past full scale so the mix was ' \
                    'turned down'
+        if res.get('stopped_short'):
+            # sixteen minutes of singing with no rest in it, or a machine that
+            # would give the engine no more room. Either way the song came out
+            # short, and saying nothing would leave that to be discovered.
+            loud += ', and one phrase was too long to render in one go, so it '                    'stopped early -- a rest anywhere in it renders the two '                    'halves separately'
         self.say('playing %.2f seconds%s%s'
                  % (res.get('seconds', 0),
                     ' from cache' if res.get('cached') else '', loud))

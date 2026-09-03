@@ -195,6 +195,11 @@ class Renderer(object):
         #: what the whole voice is scaled by inside the engine, before it
         #: clamps at full scale. 1.0 is the engine's own level.
         self.level = level
+        #: set when a render ended because it ran out of room or out of frames
+        #: rather than because the singing finished. A phrase that long is
+        #: sixteen minutes without a rest in it, but silence about it would be
+        #: worse than saying so.
+        self.stopped_short = False
         #: which voice of the bank to sing with. A program change reaches only
         #: the voices the bank's own map names; this reaches all of them, and
         #: `program` is what a song written down as program numbers still uses.
@@ -314,13 +319,22 @@ class Renderer(object):
         self._note_call(eng, pending.pop(0))
         frames = 0
         while frames < MAX_FRAMES:
-            frames += eng.frames(MAX_FRAMES - frames)
+            ran = eng.frames(MAX_FRAMES - frames)
+            frames += ran
+            if not ran:
+                # the engine ran no frames and is not asking for anything:
+                # it has no room left to write into. Asking again would ask
+                # for ever.
+                self.stopped_short = True
+                break
             if eng.state == 3:
                 break
             if eng.wants_note:              # the engine is asking for a note
                 if not pending:
                     break
                 self._note_call(eng, pending.pop(0))
+        if frames >= MAX_FRAMES:
+            self.stopped_short = True
         return self._samples(eng)
 
     def render_live(self, notes, starts, events, bpm, verbose=False,
@@ -368,7 +382,9 @@ class Renderer(object):
                     eng.program(val)
                     self._voice_controls(eng)
                     current_program = val
-            eng.frames(1)
+            if not eng.frames(1):
+                self.stopped_short = True   # no room left to write into
+                break
             frames += 1
             if verbose and frames % 400 == 0:
                 print('   %6.1f s rendered, %d notes left'
@@ -380,6 +396,8 @@ class Renderer(object):
                 if not queue:
                     break
                 feed()
+        if frames >= MAX_FRAMES:
+            self.stopped_short = True
         return self._samples(eng)
 
 

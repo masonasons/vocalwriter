@@ -355,6 +355,8 @@ class Engine(object):
         self._cache = {}
         #: voice -> how far it has to be turned down, worked out once
         self._headroom = {}
+        #: whether the last render ended early, for the caller to pass on
+        self.stopped_short = False
         self.cache_dir = os.path.join(tempfile.gettempdir(), 'vocalwriter-cache')
 
     @property
@@ -494,7 +496,7 @@ class Engine(object):
             write_wav(out, self._ticked(y, metro, core))   # the audio anyway
             where = out
         return {'seconds': seconds, 'peak': peak, 'path': where,
-                'cached': False}
+                'cached': False, 'stopped_short': self.stopped_short}
 
     @staticmethod
     def _ticked(y, metro, song):
@@ -525,6 +527,7 @@ class Engine(object):
         tracks = tracks_of(song)
         if not any(t.get('notes') for t in tracks):
             raise ValueError('nothing to sing')
+        self.stopped_short = False
         song_reverb = clean_reverb(song.get('reverb'))
         groups = {}
         for t in tracks:
@@ -674,9 +677,12 @@ class Engine(object):
                              at * spb, (at + span) * spb)
             # render_live is what applies the bends; with no events it produces
             # the same samples as render, checked against it
-            y = Renderer(program=program, bpm=bpm, voice=voice,
-                         voice_id=voice_id, level=level).render_live(
-                notes, [0] * len(notes), ev, lambda _t: bpm)
+            renderer = Renderer(program=program, bpm=bpm, voice=voice,
+                                voice_id=voice_id, level=level)
+            y = renderer.render_live(notes, [0] * len(notes), ev,
+                                     lambda _t: bpm)
+            if renderer.stopped_short:
+                self.stopped_short = True
             i = int(round((at - start) * spb * SAMPLE_RATE))
             if i < 0:                     # the phrase began before the cursor
                 y = y[-i:]
