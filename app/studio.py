@@ -32,7 +32,7 @@ from app.lists import ReportList                             # noqa: E402
 from app import project                                      # noqa: E402
 from app.engine import Engine                                # noqa: E402
 from app.player import PLAYING, Player                        # noqa: E402
-from ppc import paths, phonology                             # noqa: E402
+from ppc import paths, phonology, render                     # noqa: E402
 from ppc.song import parse_pitch                             # noqa: E402
 
 SHARP = ('C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B')
@@ -872,8 +872,28 @@ class NoteDialog(wx.Dialog):
         return self.note
 
 
+class SongSettingsDialog(wx.Dialog):
+    """Settings that belong to the whole song rather than to one part."""
+
+    def __init__(self, parent, consonant_pct):
+        wx.Dialog.__init__(self, parent, title='Song settings')
+        outer = wx.BoxSizer(wx.VERTICAL)
+        self.consonants = wx.SpinCtrl(self, min=10, max=100,
+                                      initial=int(consonant_pct),
+                                      size=(80, -1))
+        labelled(self, outer, 'Consonant length', self.consonants,
+                 hint='100 is natural, 40 clips them hard against the vowels')
+        outer.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL),
+                  0, wx.EXPAND | wx.ALL, 8)
+        self.SetSizerAndFit(outer)
+        self.consonants.SetFocus()
+
+    def result(self):
+        return self.consonants.GetValue()
+
+
 class TrackDialog(wx.Dialog):
-    """A track's name, voice, volume and pan."""
+    """A track's name, voice, volume and pan, and how that voice is set up."""
 
     def __init__(self, parent, studio, track):
         wx.Dialog.__init__(self, parent, title='Track')
@@ -897,6 +917,36 @@ class TrackDialog(wx.Dialog):
         labelled(self, outer, 'Pan', self.pan,
                  hint='-100 far left to 100 far right')
 
+        # A part can keep its own consonant length. Off by default, because
+        # the song's setting is the right answer for most parts and one number
+        # in one place is easier to reason about than one per track.
+        own = getattr(track, 'consonants', None)
+        self.own_consonants = wx.CheckBox(
+            self, label='&Consonant length just for this track')
+        self.own_consonants.SetValue(own is not None)
+        outer.Add(self.own_consonants, 0, wx.ALL, 6)
+        self.consonants = wx.SpinCtrl(
+            self, min=10, max=100,
+            initial=int(round((own if own is not None else
+                               studio.consonant_pct / 100.0) * 100)),
+            size=(80, -1))
+        labelled(self, outer, 'Consonant length', self.consonants,
+                 hint='when the box above is ticked')
+        self.consonants.Enable(own is not None)
+        self.own_consonants.Bind(
+            wx.EVT_CHECKBOX,
+            lambda e: self.consonants.Enable(self.own_consonants.GetValue()))
+
+        # the engine's own voice controls
+        self.voice_ctrls = {}
+        values = getattr(track, 'voice', None) or {}
+        for key, _call, default, lo, hi, label, hint in render.VOICE_CONTROLS:
+            spin = wx.SpinCtrl(self, min=lo, max=hi,
+                               initial=int(values.get(key, default)),
+                               size=(90, -1))
+            labelled(self, outer, label, spin, hint=hint)
+            self.voice_ctrls[key] = spin
+
         outer.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL),
                   0, wx.EXPAND | wx.ALL, 8)
         self.SetSizerAndFit(outer)
@@ -911,6 +961,13 @@ class TrackDialog(wx.Dialog):
         return (self.name.GetValue().strip() or 'Voice', program,
                 self.volume.GetValue(), self.pan.GetValue())
 
+    def apply_voice(self, track):
+        """Put the voice settings and the consonant length onto the track."""
+        track.voice = render.clean_voice(
+            dict((k, c.GetValue()) for k, c in self.voice_ctrls.items()))
+        track.consonants = (self.consonants.GetValue() / 100.0
+                            if self.own_consonants.GetValue() else None)
+
 
 class Frame(wx.Frame):
     def __init__(self):
@@ -919,6 +976,10 @@ class Frame(wx.Frame):
         #: Every part of the song. There is always at least one: a song
         #: with no tracks has nowhere to put a note.
         self.tracks = [project.Track(name='Voice 1')]
+        #: consonant length for the song, as a percentage. Lives in the song
+        #: settings dialog rather than the main window: it is set once for a
+        #: piece and then left alone, and a track can override it.
+        self.consonant_pct = 100
         self.current = 0
         self._switching = False
         self.programs = [0]
@@ -975,9 +1036,6 @@ class Frame(wx.Frame):
         self.sig.Bind(wx.EVT_TEXT_ENTER, self.on_sig)
         self.sig.Bind(wx.EVT_KILL_FOCUS, self.on_sig)
         labelled(p, top, 'Time signature', self.sig)
-        self.consonants = wx.SpinCtrl(p, min=10, max=100, initial=100,
-                                      size=(80, -1))
-        labelled(p, top, 'Consonant length', self.consonants)
         outer.Add(top, 0, wx.EXPAND)
 
         # The tracks come before the notes, so that Tab runs down the window
@@ -1107,6 +1165,11 @@ class Frame(wx.Frame):
         f.Append(ID_EXPORT_TRACKS, 'Export &tracks...	Ctrl+Shift+T',
                  'Write every track to a file of its own')
         f.AppendSeparator()
+        # wx moves this into the application menu on macOS, where it becomes
+        # Command+comma; elsewhere it stays here as Control+comma.
+        f.Append(wx.ID_PREFERENCES, '&Song settings...\tCtrl+,',
+                 'Settings for the whole song')
+        f.AppendSeparator()
         f.Append(wx.ID_EXIT, 'E&xit	Alt+F4')
 
         help_ = wx.Menu()
@@ -1158,8 +1221,19 @@ class Frame(wx.Frame):
                                (ID_IMPORT, self.on_import),
                                (ID_EXPORT, self.on_export),
                                (ID_EXPORT_TRACKS, self.on_export_tracks),
+                               (wx.ID_PREFERENCES, self.on_song_settings),
                                (wx.ID_EXIT, lambda e: self.Close())):
             self.Bind(wx.EVT_MENU, handler, id=ident)
+
+    def on_song_settings(self, _evt):
+        dlg = SongSettingsDialog(self, self.consonant_pct)
+        if dlg.ShowModal() == wx.ID_OK:
+            was = self.consonant_pct
+            self.consonant_pct = dlg.result()
+            if self.consonant_pct != was:
+                self.touch()
+            self.say('consonant length %d%%' % self.consonant_pct)
+        dlg.Destroy()
 
     def on_keys(self, _evt):
         for line in ('F6  move between the tracks list and the notes list',
@@ -1177,8 +1251,7 @@ class Frame(wx.Frame):
                      'Ctrl+C, Ctrl+X, Ctrl+V  copy, cut and paste notes',
                      'Ctrl+A  select every note',
                      'Ctrl+Up or Ctrl+Down  move a note earlier or later',
-                     'Consonant length shortens every consonant: 100 is '
-                     'natural, 40 clips them hard against the vowels',
+                     'Ctrl+comma  song settings, where consonant length is',
                      'Shift with the arrow keys selects more than one note',
                      'Alt+Up or Alt+Down  transpose a semitone',
                      'Alt+Right or Alt+Left  a sixteenth note longer or '
@@ -1359,6 +1432,7 @@ class Frame(wx.Frame):
         dlg = TrackDialog(self, self, t)
         if dlg.ShowModal() == wx.ID_OK:
             t.name, t.program, t.volume, t.pan = dlg.result()
+            dlg.apply_voice(t)
             self.touch()
             self.refresh_track(i)
             if i == self.current:
@@ -1842,9 +1916,14 @@ class Frame(wx.Frame):
         elif notes is None:
             parts = project.audible(self.tracks)
         else:
-            parts = [project.Track(program=self.track.program, notes=notes)]
+            # hearing one note should sound like the track it is in, so it
+            # borrows that track's voice settings as well as its program
+            parts = [project.Track(program=self.track.program, notes=notes,
+                                   voice=getattr(self.track, 'voice', None),
+                                   consonants=getattr(self.track,
+                                                      'consonants', None))]
         return {'bpm': float(self.tempo.GetValue()),
-                'consonants': self.consonants.GetValue() / 100.0,
+                'consonants': self.consonant_pct / 100.0,
                 'start': round(float(start), 6),
                 'tracks': [self.part(t) for t in parts]}
 
@@ -1853,6 +1932,8 @@ class Frame(wx.Frame):
         return {'program': t.program,
                 'volume': t.volume / 100.0,
                 'pan': t.pan / 100.0,
+                'voice': dict(getattr(t, 'voice', None) or {}),
+                'consonants': getattr(t, 'consonants', None),
                 'notes': [{'pitch': n.pitch, 'beats': n.beats,
                            'phonemes': n.phonemes or [REST]} for n in t.notes],
                 'bends': [[round(at, 5), round(v, 4), bool(sl)]
@@ -2133,6 +2214,7 @@ class Frame(wx.Frame):
         self.tracks = [project.Track(
             name=t['name'], program=t['program'], volume=t['volume'],
             pan=t['pan'], mute=t['mute'], solo=t['solo'],
+            voice=t.get('voice'), consonants=t.get('consonants'),
             notes=[Note(ph, pitch, beats, word, bend)
                    for ph, pitch, beats, word, bend in t['rows']])
             for t in tracks]
@@ -2142,7 +2224,7 @@ class Frame(wx.Frame):
         if sig:
             self.sig.ChangeValue(project.format_sig(sig))
         if consonants:
-            self.consonants.SetValue(int(round(consonants * 100)))
+            self.consonant_pct = max(10, min(100, int(round(consonants * 100))))
         self.path = path
         self.sync_tracks(select=0)
         self.sync(select=0)
@@ -2197,8 +2279,7 @@ class Frame(wx.Frame):
     def write_project(self, path):
         try:
             project.save(path, self.tempo.GetValue(), self.tracks,
-                         self.signature(),
-                         self.consonants.GetValue() / 100.0)
+                         self.signature(), self.consonant_pct / 100.0)
         except OSError as exc:
             self.say('could not save: %s' % exc)
             return

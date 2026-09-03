@@ -84,6 +84,48 @@ BEND_SCALE = 8
 #: so no fudge is applied.
 BRIGHTNESS = 1.0
 
+#: The voice controls VocalWriter exposes, as
+#: (key, engine call, default, low, high, label, hint).
+#:
+#: The defaults are the engine's own, read out of the context after
+#: InitDefaultVoiceCntrls has run. A control is sent only when it differs from
+#: its default, so a song that sets none of them sounds exactly as it did
+#: before they existed -- which matters, because the values do not round-trip
+#: perfectly: colour's default mix is 0.75 and the nearest the 0-127 control
+#: can say is 95, or 0.748.
+#:
+#: Portamento is not here. `Speech_Portamento` reads a table at ctx[0x1070]
+#: that nothing fills, so it returns zero for every input and changes the audio
+#: by exactly nothing -- the same gap as the letter-to-sound tables. There is
+#: no point offering a control that cannot do anything.
+VOICE_CONTROLS = (
+    ('color', 'Speech_Color', 95, 0, 127, 'Colour',
+     'brighter voice as it rises'),
+    ('vibrato', 'Speech_VibDepth', 31, 0, 127, 'Vibrato depth', '0 for none'),
+    ('vibrato_rate', 'Speech_VibFreq', 47, 0, 127, 'Vibrato rate',
+     'how fast it wavers'),
+    ('chorus', 'Speech_Chorus', 0, 0, 127, 'Chorus', 'thickens the voice'),
+    ('breath', 'Speech_Breath', 0, 0, 127, 'Breath', 'adds air to the tone'),
+    ('detune', 'Speech_Detune', 0, -8192, 8191, 'Detune',
+     'a shade sharp or flat'),
+)
+
+#: {key: default}
+VOICE_DEFAULTS = dict((k, d) for k, _c, d, _lo, _hi, _l, _h in VOICE_CONTROLS)
+
+
+def clean_voice(values):
+    """A voice setting dictionary with only known keys, clamped to range."""
+    out = {}
+    for key, _call, default, lo, hi, _label, _hint in VOICE_CONTROLS:
+        try:
+            v = int((values or {}).get(key, default))
+        except (TypeError, ValueError):
+            v = default
+        out[key] = max(lo, min(hi, v))
+    return out
+
+
 RAD_A = 0xcf4          # radiation shelf coefficient a
 RAD_B = 0xcf0          # and 2 - a
 G_TOTAL_VOL = 0xfbc    # the factor every voiced sample is scaled by
@@ -106,8 +148,9 @@ class Note(object):
 
 
 class Renderer(object):
-    def __init__(self, program=0, bpm=BPM, brightness=BRIGHTNESS):
+    def __init__(self, program=0, bpm=BPM, brightness=BRIGHTNESS, voice=None):
         self.brightness = brightness
+        self.voice = clean_voice(voice)
         self.blob = load()
         self.order = phoneme_order(self.blob)
         self.index = {n: i for i, n in enumerate(self.order)}
@@ -185,6 +228,13 @@ class Renderer(object):
         m.call('InitDefaultVoiceCntrls', vw.ctx)
         m.call('Speech_Volume', vw.g, 0, 127)
         m.call('SetTotalVolume', vw.ctx)
+        # Only what has been moved off its default, so an unset control is
+        # left exactly as the engine had it rather than re-stated slightly
+        # differently through a 0-127 knob.
+        for key, call, default, _lo, _hi, _label, _hint in VOICE_CONTROLS:
+            value = self.voice.get(key, default)
+            if value != default:
+                m.call(call, vw.g, 0, int(value) & 0xFFFFFFFF)
         if self.brightness is not None and m.mem.r16(vw.ctx + 0xcee):
             a0 = m.mem.rf32(vw.ctx + RAD_A)
             a = a0 * self.brightness

@@ -12,6 +12,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from ppc.render import VOICE_DEFAULTS, clean_voice   # noqa: E402
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from ppc import phonology                                    # noqa: E402
 from tools.smf import MidiFile, split_phonemes               # noqa: E402
 
@@ -56,7 +62,8 @@ class Track(object):
     """
 
     def __init__(self, name='', program=0, volume=100, pan=0,
-                 mute=False, solo=False, notes=None):
+                 mute=False, solo=False, notes=None, voice=None,
+                 consonants=None):
         self.name = name
         self.program = int(program)
         self.volume = int(volume)
@@ -64,6 +71,13 @@ class Track(object):
         self.mute = bool(mute)
         self.solo = bool(solo)
         self.notes = list(notes or [])
+        #: the engine's voice controls for this part -- colour, vibrato,
+        #: chorus, breath, detune. See ppc.render.VOICE_CONTROLS.
+        self.voice = clean_voice(voice)
+        #: consonant length for this part, or None to follow the project's.
+        #: A part sung fast wants shorter consonants than one held slowly, and
+        #: that is a property of the part rather than of the song.
+        self.consonants = None if consonants is None else float(consonants)
         #: which note was last selected here, so that moving between tracks
         #: comes back to where you were. Not saved: it is not part of the song.
         self.cursor = 0
@@ -146,10 +160,19 @@ def save(path, bpm, tracks, sig=DEFAULT_SIG, consonants=1.0):
 
 
 def _track_doc(t):
-    return {'name': t.name, 'program': int(t.program),
-            'volume': int(t.volume), 'pan': int(t.pan),
-            'mute': bool(t.mute), 'solo': bool(t.solo),
-            'notes': [_note_doc(n) for n in t.notes]}
+    doc = {'name': t.name, 'program': int(t.program),
+           'volume': int(t.volume), 'pan': int(t.pan),
+           'mute': bool(t.mute), 'solo': bool(t.solo),
+           'notes': [_note_doc(n) for n in t.notes]}
+    # Only what has been moved off its default is written, so a project that
+    # touches none of this reads the same as one saved before it existed.
+    voice = {k: int(v) for k, v in (getattr(t, 'voice', None) or {}).items()
+             if k in VOICE_DEFAULTS and int(v) != VOICE_DEFAULTS[k]}
+    if voice:
+        doc['voice'] = voice
+    if getattr(t, 'consonants', None) is not None:
+        doc['consonants'] = float(t.consonants)
+    return doc
 
 
 def _note_doc(n):
@@ -195,7 +218,14 @@ def load(path):
 
 
 def _read_track(doc, index=0):
+    con = doc.get('consonants')
+    try:
+        con = None if con is None else float(con)
+    except (TypeError, ValueError):
+        con = None
     return {'name': doc.get('name') or ('Voice %d' % (index + 1)),
+            'voice': clean_voice(doc.get('voice')),
+            'consonants': con,
             'program': _int(doc.get('program'), 0),
             'volume': max(0, min(100, _int(doc.get('volume'), 100))),
             'pan': max(-100, min(100, _int(doc.get('pan'), 0))),

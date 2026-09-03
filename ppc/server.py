@@ -430,6 +430,15 @@ class Engine(object):
         spb = 60.0 / max(bpm, 1e-6)
         vel = int(track.get('velocity', 64))
         program = int(track.get('program', 0))
+        voice = track.get('voice') or None
+        # A part may set its own consonant length; without one it follows the
+        # project's, which is what the setting in the song dialog is.
+        own = track.get('consonants')
+        if own is not None:
+            try:
+                consonants = float(own)
+            except (TypeError, ValueError):
+                pass
         # [(beat, semitones, slides into the next)], in the song's own time
         bends = sorted(_triples(track.get('bends') or []))
         runs, total = phrases(track.get('notes') or [])
@@ -454,7 +463,7 @@ class Engine(object):
                              at * spb, (at + span) * spb)
             # render_live is what applies the bends; with no events it produces
             # the same samples as render, checked against it
-            y = Renderer(program=program, bpm=bpm).render_live(
+            y = Renderer(program=program, bpm=bpm, voice=voice).render_live(
                 notes, [0] * len(notes), ev, lambda _t: bpm)
             i = int(round((at - start) * spb * SAMPLE_RATE))
             if i < 0:                     # the phrase began before the cursor
