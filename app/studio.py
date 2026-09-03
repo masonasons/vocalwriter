@@ -873,27 +873,58 @@ class NoteDialog(wx.Dialog):
 
 
 class SongSettingsDialog(wx.Dialog):
-    """Settings that belong to the whole song rather than to one part."""
+    """Settings that belong to the whole song rather than to one part.
 
-    def __init__(self, parent, bpm, consonant_pct):
+    The voice controls here are the song's: every part is sung with them
+    unless it has been given its own in the track dialog. Setting the vibrato
+    for a piece is one number in one place rather than the same number typed
+    into every track.
+    """
+
+    def __init__(self, parent, bpm, sig, consonant_pct, voice):
         wx.Dialog.__init__(self, parent, title='Song settings')
         outer = wx.BoxSizer(wx.VERTICAL)
         self.tempo = wx.SpinCtrl(self, min=30, max=250, initial=int(bpm),
                                  size=(80, -1))
         labelled(self, outer, 'Tempo', self.tempo, hint='beats per minute')
+        #: what to fall back on if the box is left saying something that is
+        #: not a time signature: what the song had, rather than the default,
+        #: because a mistyped 3/4 should not quietly become 4/4
+        self.was_sig = tuple(sig)
+        self.sig = wx.TextCtrl(self, value=project.format_sig(sig),
+                               size=(60, -1))
+        labelled(self, outer, 'Time signature', self.sig,
+                 hint='as 4/4; it sets where the bars fall')
         self.consonants = wx.SpinCtrl(self, min=10, max=100,
                                       initial=int(consonant_pct),
                                       size=(80, -1))
         labelled(self, outer, 'Consonant length', self.consonants,
                  hint='100 is natural, 40 clips them hard against the vowels')
+
+        # the engine's own voice controls, for every part that has not been
+        # given its own
+        self.voice_ctrls = {}
+        values = voice or {}
+        for key, _call, default, lo, hi, label, hint in render.VOICE_CONTROLS:
+            spin = wx.SpinCtrl(self, min=lo, max=hi,
+                               initial=int(values.get(key, default)),
+                               size=(90, -1))
+            labelled(self, outer, label, spin, hint=hint)
+            self.voice_ctrls[key] = spin
+
         outer.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL),
                   0, wx.EXPAND | wx.ALL, 8)
         self.SetSizerAndFit(outer)
         self.tempo.SetFocus()
 
     def result(self):
-        """(tempo, consonant length)."""
-        return self.tempo.GetValue(), self.consonants.GetValue()
+        """(tempo, time signature, consonant length, voice controls)."""
+        return (self.tempo.GetValue(),
+                project.parse_sig(self.sig.GetValue(), self.was_sig),
+                self.consonants.GetValue(),
+                render.clean_voice(
+                    dict((k, c.GetValue())
+                         for k, c in self.voice_ctrls.items())))
 
 
 class TrackDialog(wx.Dialog):
@@ -941,15 +972,25 @@ class TrackDialog(wx.Dialog):
             wx.EVT_CHECKBOX,
             lambda e: self.consonants.Enable(self.own_consonants.GetValue()))
 
-        # the engine's own voice controls
+        # The engine's own voice controls. Like the consonant length, a
+        # part follows the song's until it is given its own: the values shown
+        # while the box is unticked are the song's, so ticking it starts from
+        # what you were already hearing rather than from nothing.
+        own_voice = getattr(track, 'voice', None)
+        self.own_voice = wx.CheckBox(
+            self, label='&Voice controls just for this track')
+        self.own_voice.SetValue(own_voice is not None)
+        outer.Add(self.own_voice, 0, wx.ALL, 6)
         self.voice_ctrls = {}
-        values = getattr(track, 'voice', None) or {}
+        values = own_voice if own_voice is not None else studio.song_voice
         for key, _call, default, lo, hi, label, hint in render.VOICE_CONTROLS:
             spin = wx.SpinCtrl(self, min=lo, max=hi,
-                               initial=int(values.get(key, default)),
+                               initial=int((values or {}).get(key, default)),
                                size=(90, -1))
             labelled(self, outer, label, spin, hint=hint)
+            spin.Enable(own_voice is not None)
             self.voice_ctrls[key] = spin
+        self.own_voice.Bind(wx.EVT_CHECKBOX, self.on_own_voice)
 
         outer.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL),
                   0, wx.EXPAND | wx.ALL, 8)
@@ -965,10 +1006,20 @@ class TrackDialog(wx.Dialog):
         return (self.name.GetValue().strip() or 'Voice', program,
                 self.volume.GetValue(), self.pan.GetValue())
 
+    def on_own_voice(self, _evt):
+        for spin in self.voice_ctrls.values():
+            spin.Enable(self.own_voice.GetValue())
+
     def apply_voice(self, track):
-        """Put the voice settings and the consonant length onto the track."""
-        track.voice = render.clean_voice(
+        """Put the voice settings and the consonant length onto the track.
+
+        Both are None when the part is following the song, which is not the
+        same as holding a copy of what the song currently says: a part that
+        follows keeps following when the song settings change.
+        """
+        track.voice = (render.clean_voice(
             dict((k, c.GetValue()) for k, c in self.voice_ctrls.items()))
+            if self.own_voice.GetValue() else None)
         track.consonants = (self.consonants.GetValue() / 100.0
                             if self.own_consonants.GetValue() else None)
 
@@ -980,12 +1031,15 @@ class Frame(wx.Frame):
         #: Every part of the song. There is always at least one: a song
         #: with no tracks has nowhere to put a note.
         self.tracks = [project.Track(name='Voice 1')]
-        #: the song's tempo, and its consonant length as a percentage. Both
-        #: live in the song settings dialog rather than the main window: they
-        #: are set once for a piece and then left alone. A track can override
-        #: the consonant length.
+        #: The song's tempo, its time signature, its consonant length as a
+        #: percentage, and the engine's voice controls. All of it lives in the
+        #: song settings dialog rather than the main window: it is set once for
+        #: a piece and then left alone. A track can override the consonant
+        #: length and the voice controls; nothing else here is per-part.
         self.bpm = 120
+        self.sig = project.DEFAULT_SIG
         self.consonant_pct = 100
+        self.song_voice = render.clean_voice(None)
         self.current = 0
         self._switching = False
         self.programs = [0]
@@ -1032,15 +1086,10 @@ class Frame(wx.Frame):
         p = wx.Panel(self)
         outer = wx.BoxSizer(wx.VERTICAL)
 
-        # The voice used to be here. It belongs to a track now: a song with
-        # two parts in two voices has no single voice to put in a window bar.
-        top = wx.BoxSizer(wx.HORIZONTAL)
-        self.sig = wx.TextCtrl(p, value=project.format_sig(project.DEFAULT_SIG),
-                               size=(60, -1), style=wx.TE_PROCESS_ENTER)
-        self.sig.Bind(wx.EVT_TEXT_ENTER, self.on_sig)
-        self.sig.Bind(wx.EVT_KILL_FOCUS, self.on_sig)
-        labelled(p, top, 'Time signature', self.sig)
-        outer.Add(top, 0, wx.EXPAND)
+        # Nothing sits above the lists any more. The voice belongs to a
+        # track, and the tempo and the time signature to the song settings
+        # dialog, so the window holds the song itself and nothing else: which
+        # part, and what it sings. Tab reaches the two lists and stops.
 
         # The tracks come before the notes, so that Tab runs down the window
         # in the order the song is put together: which part, then what it
@@ -1172,7 +1221,7 @@ class Frame(wx.Frame):
         # wx moves this into the application menu on macOS, where it becomes
         # Command+comma; elsewhere it stays here as Control+comma.
         f.Append(wx.ID_PREFERENCES, '&Song settings...\tCtrl+,',
-                 'Settings for the whole song')
+                 'Tempo, time signature, consonant length and voice controls')
         f.AppendSeparator()
         f.Append(wx.ID_EXIT, 'E&xit	Alt+F4')
 
@@ -1230,14 +1279,26 @@ class Frame(wx.Frame):
             self.Bind(wx.EVT_MENU, handler, id=ident)
 
     def on_song_settings(self, _evt):
-        dlg = SongSettingsDialog(self, self.bpm, self.consonant_pct)
+        dlg = SongSettingsDialog(self, self.bpm, self.signature(),
+                                 self.consonant_pct, self.song_voice)
         if dlg.ShowModal() == wx.ID_OK:
-            was = (self.bpm, self.consonant_pct)
-            self.bpm, self.consonant_pct = dlg.result()
-            if (self.bpm, self.consonant_pct) != was:
+            was = (self.bpm, self.sig, self.consonant_pct, self.song_voice)
+            (self.bpm, self.sig, self.consonant_pct,
+             self.song_voice) = dlg.result()
+            if (self.bpm, self.sig, self.consonant_pct,
+                    self.song_voice) != was:
                 self.touch()
-            self.say('%d beats per minute, consonant length %d%%'
-                     % (self.bpm, self.consonant_pct))
+            if self.sig != was[1]:
+                # which bar a note falls in is read off the signature, so the
+                # list is saying the wrong thing until it is built again
+                self.sync(select=self.selection())
+            self.say('%d beats per minute, %s, %g beats to the bar, '
+                     'consonant length %d%%'
+                     % (self.bpm, project.format_sig(self.sig),
+                        project.bar_beats(self.sig), self.consonant_pct))
+            if self.song_voice != was[3]:
+                self.say('voice controls set for every part that has not been '
+                         'given its own')
         dlg.Destroy()
 
     def on_keys(self, _evt):
@@ -1256,7 +1317,9 @@ class Frame(wx.Frame):
                      'Ctrl+C, Ctrl+X, Ctrl+V  copy, cut and paste notes',
                      'Ctrl+A  select every note',
                      'Ctrl+Up or Ctrl+Down  move a note earlier or later',
-                     'Ctrl+comma  song settings: tempo and consonant length',
+                     'Ctrl+comma  song settings: tempo, time signature, '
+                     'consonant length, and the voice controls every part '
+                     'follows unless it has its own',
                      'Shift with the arrow keys selects more than one note',
                      'Alt+Up or Alt+Down  transpose a semitone',
                      'Alt+Right or Alt+Left  a sixteenth note longer or '
@@ -1443,9 +1506,11 @@ class Frame(wx.Frame):
             if i == self.current:
                 relabel(self.list, 'Notes in %s' % t.name)
             reannounce(self.tracks_list, i)
-            self.say('%s, %s, volume %d%%, %s'
+            self.say('%s, %s, volume %d%%, %s, %s'
                      % (t.name, self.voice_name(t.program), t.volume,
-                        project.pan_text(t.pan)))
+                        project.pan_text(t.pan),
+                        'its own voice controls' if t.voice is not None
+                        else "the song's voice controls"))
         dlg.Destroy()
 
     def on_track_remove(self, _evt):
@@ -1517,17 +1582,9 @@ class Frame(wx.Frame):
             self.list.Focus(max(0, min(rows[0], self.list.GetItemCount() - 1)))
 
     def signature(self):
-        return project.parse_sig(self.sig.GetValue())
-
-    def on_sig(self, evt):
-        evt.Skip()
-        sig = self.signature()
-        text = project.format_sig(sig)
-        if text != self.sig.GetValue():
-            self.sig.ChangeValue(text)
-        self.sync(select=self.selection())
-        self.say('%s, %g beats to the bar'
-                 % (text, project.bar_beats(sig)))
+        """The time signature. Still a method, because everything asks for it
+        as one from when it was read out of a box in the window."""
+        return self.sig
 
     def position(self, index):
         """Where a note starts, in beats from the beginning."""
@@ -1933,11 +1990,19 @@ class Frame(wx.Frame):
                 'tracks': [self.part(t) for t in parts]}
 
     def part(self, t):
-        """One track for the engine. Volume and pan go out as fractions."""
+        """One track for the engine. Volume and pan go out as fractions.
+
+        A part with no voice controls of its own is sung with the song's, so
+        the resolving happens here and the engine is handed one set of numbers
+        per track without having to know where they came from.
+        """
+        voice = getattr(t, 'voice', None)
+        if voice is None:
+            voice = self.song_voice
         return {'program': t.program,
                 'volume': t.volume / 100.0,
                 'pan': t.pan / 100.0,
-                'voice': dict(getattr(t, 'voice', None) or {}),
+                'voice': dict(voice or {}),
                 'consonants': getattr(t, 'consonants', None),
                 'notes': [{'pitch': n.pitch, 'beats': n.beats,
                            'phonemes': n.phonemes or [REST]} for n in t.notes],
@@ -2209,7 +2274,8 @@ class Frame(wx.Frame):
             wx.YES_NO | wx.CANCEL | wx.ICON_QUESTION, self)
         return answer == wx.YES
 
-    def take(self, bpm, tracks, path=None, sig=None, consonants=None):
+    def take(self, bpm, tracks, path=None, sig=None, consonants=None,
+             voice=None):
         """Replace the song with what was loaded or imported.
 
         `tracks` are the dictionaries `project.load` gives back, whose rows
@@ -2227,9 +2293,10 @@ class Frame(wx.Frame):
             self.tracks = [project.Track(name='Voice 1')]
         self.bpm = max(30, min(250, int(round(bpm))))
         if sig:
-            self.sig.ChangeValue(project.format_sig(sig))
+            self.sig = project.parse_sig(project.format_sig(sig))
         if consonants:
             self.consonant_pct = max(10, min(100, int(round(consonants * 100))))
+        self.song_voice = render.clean_voice(voice)
         self.path = path
         self.sync_tracks(select=0)
         self.sync(select=0)
@@ -2255,11 +2322,11 @@ class Frame(wx.Frame):
                 return
             path = dlg.GetPath()
         try:
-            bpm, tracks, sig, consonants = project.load(path)
+            bpm, tracks, sig, consonants, voice = project.load(path)
         except (OSError, ValueError) as exc:
             self.say('cannot open %s: %s' % (os.path.basename(path), exc))
             return
-        self.take(bpm, tracks, path, sig, consonants)
+        self.take(bpm, tracks, path, sig, consonants, voice)
         self.say('opened %s: %d track%s, %d notes, %g bpm'
                  % (os.path.basename(path), len(self.tracks),
                     '' if len(self.tracks) == 1 else 's',
@@ -2284,7 +2351,8 @@ class Frame(wx.Frame):
     def write_project(self, path):
         try:
             project.save(path, self.bpm, self.tracks,
-                         self.signature(), self.consonant_pct / 100.0)
+                         self.signature(), self.consonant_pct / 100.0,
+                         self.song_voice)
         except OSError as exc:
             self.say('could not save: %s' % exc)
             return

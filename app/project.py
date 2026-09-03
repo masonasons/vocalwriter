@@ -13,11 +13,6 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ppc.render import VOICE_DEFAULTS, clean_voice   # noqa: E402
-import os
-import sys
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from ppc import phonology                                    # noqa: E402
 from tools.smf import MidiFile, split_phonemes               # noqa: E402
 
@@ -72,8 +67,10 @@ class Track(object):
         self.solo = bool(solo)
         self.notes = list(notes or [])
         #: the engine's voice controls for this part -- colour, vibrato,
-        #: chorus, breath, detune. See ppc.render.VOICE_CONTROLS.
-        self.voice = clean_voice(voice)
+        #: chorus, breath, detune -- or None to follow the song's, which is
+        #: what a part does unless it is given its own. See
+        #: ppc.render.VOICE_CONTROLS.
+        self.voice = None if voice is None else clean_voice(voice)
         #: consonant length for this part, or None to follow the project's.
         #: A part sung fast wants shorter consonants than one held slowly, and
         #: that is a property of the part rather than of the song.
@@ -143,9 +140,10 @@ def parse_sig(text, fallback=DEFAULT_SIG):
     return num, den
 
 
-def save(path, bpm, tracks, sig=DEFAULT_SIG, consonants=1.0):
+def save(path, bpm, tracks, sig=DEFAULT_SIG, consonants=1.0, voice=None):
     """Write a project. `tracks` are Tracks whose notes have phonemes and a
-    pitch, a length and a word."""
+    pitch, a length and a word. `voice` is the engine's voice controls for the
+    song, which every track that has none of its own is sung with."""
     doc = {
         'format': 'vocalwriter-studio',
         'version': VERSION,
@@ -154,9 +152,20 @@ def save(path, bpm, tracks, sig=DEFAULT_SIG, consonants=1.0):
         'consonants': float(consonants),
         'tracks': [_track_doc(t) for t in tracks],
     }
+    song_voice = _voice_doc(voice)
+    if song_voice:
+        doc['voice'] = song_voice
     with open(path, 'w', encoding='utf-8') as fh:
         json.dump(doc, fh, indent=1)
         fh.write('\n')
+
+
+def _voice_doc(values):
+    """Voice controls as they are written down: only the ones moved off the
+    engine's own default, so a project that touches none of them reads the
+    same as one saved before they existed."""
+    return dict((k, int(v)) for k, v in (values or {}).items()
+                if k in VOICE_DEFAULTS and int(v) != VOICE_DEFAULTS[k])
 
 
 def _track_doc(t):
@@ -164,12 +173,13 @@ def _track_doc(t):
            'volume': int(t.volume), 'pan': int(t.pan),
            'mute': bool(t.mute), 'solo': bool(t.solo),
            'notes': [_note_doc(n) for n in t.notes]}
-    # Only what has been moved off its default is written, so a project that
-    # touches none of this reads the same as one saved before it existed.
-    voice = {k: int(v) for k, v in (getattr(t, 'voice', None) or {}).items()
-             if k in VOICE_DEFAULTS and int(v) != VOICE_DEFAULTS[k]}
-    if voice:
-        doc['voice'] = voice
+    # A track with no voice controls of its own writes none at all and reads
+    # back following the song. One that has them writes what it has moved,
+    # which may be nothing -- an empty entry still says "its own", so a part
+    # deliberately left at the defaults is not quietly signed up to whatever
+    # the song does later.
+    if getattr(t, 'voice', None) is not None:
+        doc['voice'] = _voice_doc(t.voice)
     if getattr(t, 'consonants', None) is not None:
         doc['consonants'] = float(t.consonants)
     return doc
@@ -186,7 +196,7 @@ def _note_doc(n):
 
 
 def load(path):
-    """Read a project: (bpm, tracks, time signature, consonants).
+    """Read a project: (bpm, tracks, time signature, consonants, voice).
 
     A track comes back as a dictionary whose `rows` are what the editor turns
     into notes, since the note itself belongs to the editor and not here.
@@ -214,7 +224,8 @@ def load(path):
         consonants = float(doc.get('consonants', 1.0))
     except (TypeError, ValueError):
         consonants = 1.0
-    return float(doc.get('bpm', 120)), tracks, sig, consonants
+    return (float(doc.get('bpm', 120)), tracks, sig, consonants,
+            clean_voice(doc.get('voice')))
 
 
 def _read_track(doc, index=0):
@@ -224,7 +235,7 @@ def _read_track(doc, index=0):
     except (TypeError, ValueError):
         con = None
     return {'name': doc.get('name') or ('Voice %d' % (index + 1)),
-            'voice': clean_voice(doc.get('voice')),
+            'voice': (clean_voice(doc['voice']) if 'voice' in doc else None),
             'consonants': con,
             'program': _int(doc.get('program'), 0),
             'volume': max(0, min(100, _int(doc.get('volume'), 100))),
