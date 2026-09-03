@@ -1,4 +1,4 @@
-VocalWriter Studio — getting started
+VocalWriter Studio -- getting started
 
 Running it
 
@@ -25,7 +25,7 @@ You start with one empty track. To put something in it:
 2. Press Ctrl+P to play.
 
 That is a word sung on one note. To spread it over two notes, put a hyphen
-where it should divide — dai-sy — and set "Notes to use" to 2 in the same
+where it should divide -- dai-sy -- and set "Notes to use" to 2 in the same
 dialog.
 
 Add more words the same way. Each one goes in after the note you are on, so
@@ -42,7 +42,7 @@ Move to a note with the arrow keys. Then:
 - Enter opens it: the phonemes, the pitch, the length, and the pitch bend.
 - Delete removes it.
 
-Pitches can be typed as names — C4, F#3, Bb5 — or as numbers.
+Pitches can be typed as names -- C4, F#3, Bb5 -- or as numbers.
 
 Ctrl+R puts in a rest. Rests are worth using: they end a phrase, and the
 program treats each phrase separately, so silences come out the length you
@@ -59,7 +59,7 @@ Press F6 to get to the tracks list, then Enter on the track. That dialog
 has the voice, the volume, the pan, and the reverb for that part.
 
 There are 87 voices. The ones with people's names sing the way you would
-expect. The ones with instrument names — Strings, Trumpet, Piano — are the
+expect. The ones with instrument names -- Strings, Trumpet, Piano -- are the
 same synthesiser with a recorded instrument in place of the vocal cords; they
 sing words too, and some of them sit an octave away from the note you wrote,
 which is how they were made.
