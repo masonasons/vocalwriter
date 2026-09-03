@@ -875,9 +875,12 @@ class NoteDialog(wx.Dialog):
 class SongSettingsDialog(wx.Dialog):
     """Settings that belong to the whole song rather than to one part."""
 
-    def __init__(self, parent, consonant_pct):
+    def __init__(self, parent, bpm, consonant_pct):
         wx.Dialog.__init__(self, parent, title='Song settings')
         outer = wx.BoxSizer(wx.VERTICAL)
+        self.tempo = wx.SpinCtrl(self, min=30, max=250, initial=int(bpm),
+                                 size=(80, -1))
+        labelled(self, outer, 'Tempo', self.tempo, hint='beats per minute')
         self.consonants = wx.SpinCtrl(self, min=10, max=100,
                                       initial=int(consonant_pct),
                                       size=(80, -1))
@@ -886,10 +889,11 @@ class SongSettingsDialog(wx.Dialog):
         outer.Add(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL),
                   0, wx.EXPAND | wx.ALL, 8)
         self.SetSizerAndFit(outer)
-        self.consonants.SetFocus()
+        self.tempo.SetFocus()
 
     def result(self):
-        return self.consonants.GetValue()
+        """(tempo, consonant length)."""
+        return self.tempo.GetValue(), self.consonants.GetValue()
 
 
 class TrackDialog(wx.Dialog):
@@ -976,9 +980,11 @@ class Frame(wx.Frame):
         #: Every part of the song. There is always at least one: a song
         #: with no tracks has nowhere to put a note.
         self.tracks = [project.Track(name='Voice 1')]
-        #: consonant length for the song, as a percentage. Lives in the song
-        #: settings dialog rather than the main window: it is set once for a
-        #: piece and then left alone, and a track can override it.
+        #: the song's tempo, and its consonant length as a percentage. Both
+        #: live in the song settings dialog rather than the main window: they
+        #: are set once for a piece and then left alone. A track can override
+        #: the consonant length.
+        self.bpm = 120
         self.consonant_pct = 100
         self.current = 0
         self._switching = False
@@ -1029,8 +1035,6 @@ class Frame(wx.Frame):
         # The voice used to be here. It belongs to a track now: a song with
         # two parts in two voices has no single voice to put in a window bar.
         top = wx.BoxSizer(wx.HORIZONTAL)
-        self.tempo = wx.SpinCtrl(p, min=30, max=250, initial=120, size=(80, -1))
-        labelled(p, top, 'Tempo', self.tempo)
         self.sig = wx.TextCtrl(p, value=project.format_sig(project.DEFAULT_SIG),
                                size=(60, -1), style=wx.TE_PROCESS_ENTER)
         self.sig.Bind(wx.EVT_TEXT_ENTER, self.on_sig)
@@ -1226,13 +1230,14 @@ class Frame(wx.Frame):
             self.Bind(wx.EVT_MENU, handler, id=ident)
 
     def on_song_settings(self, _evt):
-        dlg = SongSettingsDialog(self, self.consonant_pct)
+        dlg = SongSettingsDialog(self, self.bpm, self.consonant_pct)
         if dlg.ShowModal() == wx.ID_OK:
-            was = self.consonant_pct
-            self.consonant_pct = dlg.result()
-            if self.consonant_pct != was:
+            was = (self.bpm, self.consonant_pct)
+            self.bpm, self.consonant_pct = dlg.result()
+            if (self.bpm, self.consonant_pct) != was:
                 self.touch()
-            self.say('consonant length %d%%' % self.consonant_pct)
+            self.say('%d beats per minute, consonant length %d%%'
+                     % (self.bpm, self.consonant_pct))
         dlg.Destroy()
 
     def on_keys(self, _evt):
@@ -1251,7 +1256,7 @@ class Frame(wx.Frame):
                      'Ctrl+C, Ctrl+X, Ctrl+V  copy, cut and paste notes',
                      'Ctrl+A  select every note',
                      'Ctrl+Up or Ctrl+Down  move a note earlier or later',
-                     'Ctrl+comma  song settings, where consonant length is',
+                     'Ctrl+comma  song settings: tempo and consonant length',
                      'Shift with the arrow keys selects more than one note',
                      'Alt+Up or Alt+Down  transpose a semitone',
                      'Alt+Right or Alt+Left  a sixteenth note longer or '
@@ -1922,7 +1927,7 @@ class Frame(wx.Frame):
                                    voice=getattr(self.track, 'voice', None),
                                    consonants=getattr(self.track,
                                                       'consonants', None))]
-        return {'bpm': float(self.tempo.GetValue()),
+        return {'bpm': float(self.bpm),
                 'consonants': self.consonant_pct / 100.0,
                 'start': round(float(start), 6),
                 'tracks': [self.part(t) for t in parts]}
@@ -2031,7 +2036,7 @@ class Frame(wx.Frame):
         self.say('rendering %d track%s from bar %d beat %g, about %.1f seconds'
                  % (len(live), '' if len(live) == 1 else 's', bar,
                     round(beat, 2),
-                    (total - start) * 60.0 / self.tempo.GetValue()))
+                    (total - start) * 60.0 / self.bpm))
         self.engine.render(self.playback(start), self.wav,
                            lambda res: wx.CallAfter(self._played, res))
 
@@ -2220,7 +2225,7 @@ class Frame(wx.Frame):
             for t in tracks]
         if not self.tracks:
             self.tracks = [project.Track(name='Voice 1')]
-        self.tempo.SetValue(int(round(bpm)))
+        self.bpm = max(30, min(250, int(round(bpm))))
         if sig:
             self.sig.ChangeValue(project.format_sig(sig))
         if consonants:
@@ -2278,7 +2283,7 @@ class Frame(wx.Frame):
 
     def write_project(self, path):
         try:
-            project.save(path, self.tempo.GetValue(), self.tracks,
+            project.save(path, self.bpm, self.tracks,
                          self.signature(), self.consonant_pct / 100.0)
         except OSError as exc:
             self.say('could not save: %s' % exc)

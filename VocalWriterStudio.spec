@@ -101,8 +101,8 @@ if sys.platform == 'darwin':
         info_plist={
             'CFBundleName': 'VocalWriter Studio',
             'CFBundleDisplayName': 'VocalWriter Studio',
-            'CFBundleShortVersionString': '1.0',
-            'CFBundleVersion': '1.0',
+            'CFBundleShortVersionString': '1.1',
+            'CFBundleVersion': '1.1',
             'NSHighResolutionCapable': True,
             # It only ever plays audio it has rendered itself.
             'LSApplicationCategoryType': 'public.app-category.music',
