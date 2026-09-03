@@ -137,6 +137,7 @@ CTX_HF_EMPH = 0xcee         # hfEmph: zero for a voice with no shelf
 CTX_EMPH_A = 0xcf4          # the coefficient the shelf is tilted by
 CTX_EMPH_B = 0xcf0          # and 2 - a
 CTX_SPEECH_VOL = 0xfbc      # speechVolume, the factor on the voiced branch
+CTX_TRACK_LEVEL = 0xfc0     # trackLevel, which multiplies it
 G_TEMPO_SCALE = 0x3274      # tempoMul
 
 
@@ -197,6 +198,12 @@ class Editor(object):
 
     def volume(self, value):
         self.m.call('Speech_Volume', self.vw.g, 0, int(value))
+        self.m.call('SetTotalVolume', self.vw.ctx)
+
+    def level(self, gain):
+        """The track level as a factor. `Speech_TrackLevel` is amt/100 into
+        this field; the rounding is what has to go."""
+        self.m.mem.wf32(self.vw.ctx + CTX_TRACK_LEVEL, float(gain))
         self.m.call('SetTotalVolume', self.vw.ctx)
 
     def control(self, name, value):

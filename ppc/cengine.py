@@ -48,6 +48,7 @@ void vw_ed_start(vw_editor *e);
 void vw_ed_defaults(vw_editor *e, int glide);
 void vw_ed_volume(vw_editor *e, int32_t value);
 int vw_ed_control(vw_editor *e, const char *name, int32_t value);
+void vw_ed_level(vw_editor *e, float level);
 
 void vw_ed_note(vw_editor *e, int key, int nextKey, int velocity, double beats);
 int vw_ed_frames(vw_editor *e, int count);
@@ -217,6 +218,14 @@ class Editor(object):
 
     def volume(self, value):
         self._lib.vw_ed_volume(self._e, int(value))
+
+    def level(self, gain):
+        """The track level as a factor: 1.0 is the engine's own full level.
+
+        Speech_TrackLevel divides 100 by hand, which is not fine enough for a
+        voice that comes out fifty times over full scale.
+        """
+        self._lib.vw_ed_level(self._e, float(gain))
 
     def control(self, name, value):
         if self._lib.vw_ed_control(self._e, name.encode('ascii'),

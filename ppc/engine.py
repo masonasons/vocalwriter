@@ -211,6 +211,15 @@ def pan_gains(pan):
 #: VocalWriter's own defaults for a new song, from its reverb dialog.
 DEFAULT_REVERB = (40, 24)
 
+#: What a voice at full volume is aimed at, as a fraction of full scale.
+#: Not 1.0: several parts are going to be added together, and a voice that
+#: only just fits on its own leaves nothing for the others.
+HEADROOM = 0.7
+
+#: The phrase every voice is measured with -- one plain note, long enough to
+#: reach its steady level and short enough to measure in a few milliseconds.
+TEST_NOTE = ('d', 'AA')
+
 #: The most of a note that may be given to the note in front of it, so that a
 #: note opening with consonants can start early enough for its vowel to land
 #: on the beat. Half: take more than that and what is left is a grace note.
@@ -344,6 +353,8 @@ class Engine(object):
         #: one would go on claiming a hit after a later render had overwritten
         #: it, and hand back the wrong audio.
         self._cache = {}
+        #: voice -> how far it has to be turned down, worked out once
+        self._headroom = {}
         self.cache_dir = os.path.join(tempfile.gettempdir(), 'vocalwriter-cache')
 
     @property
@@ -363,6 +374,33 @@ class Engine(object):
             clean = ''.join(c for c in w if c.isalpha() or c == "'")
             out[w] = (self.lex.phonemes(clean) or []) if clean else []
         return out
+
+    def headroom(self, voice_id):
+        """What this voice has to be turned down by to fit inside full scale.
+
+        The bank's voices are nothing like each other in level. Robert peaks at
+        about seven tenths of full scale with the engine wide open; Strings,
+        Trumpet and the rest of the wavetable voices come out forty or fifty
+        times over it, and the engine clamps every sample that goes past --
+        which is distortion baked into the samples before any volume of ours
+        can touch it. So each voice is sung once, quietly, to see how loud it
+        really is, and told to stay inside afterwards.
+
+        A voice that already fits is left alone: 1.0 is the engine's own level
+        and is what the natural voices get, so they render exactly as before.
+        """
+        if voice_id in self._headroom:
+            return self._headroom[voice_id]
+        probe = 0.01
+        r = Renderer(program=0, bpm=100, voice_id=voice_id, level=probe)
+        y = r.render([Note(62, 0.6, list(TEST_NOTE))])
+        peak = float(np.abs(y).max()) / probe if len(y) else 1.0
+        # A voice that already fits is left exactly alone -- the test is
+        # whether it clips, not whether it is loud -- so every voice that
+        # worked before this renders as it did before this.
+        gain = 1.0 if peak <= 1.0 else HEADROOM / max(peak, 1e-6)
+        self._headroom[voice_id] = gain
+        return gain
 
     def voices(self):
         """Every voice the bank holds, in its own order.
@@ -486,7 +524,9 @@ class Engine(object):
         groups = {}
         for t in tracks:
             y = self._track(t, bpm, consonants, start, early)
-            vol = float(t.get('volume', 1.0))
+            # the volume went into the engine, where it can prevent clipping
+            # rather than merely quieten it
+            vol = 1.0
             left, right = pan_gains(t.get('pan', 0.0))
             own = t.get('reverb')
             rev = song_reverb if own is None else clean_reverb(own)
@@ -581,6 +621,12 @@ class Engine(object):
         vel = int(track.get('velocity', 64))
         program = int(track.get('program', 0))
         voice_id = track.get('voice_id')
+        # The engine's own level, so that a part that would clip is turned
+        # down before the clamp rather than after it. What is left for the
+        # mixing below is only the panning.
+        level = float(track.get('volume', 1.0))
+        if voice_id is not None:
+            level *= self.headroom(voice_id)
         voice = track.get('voice') or None
         # A part may set its own consonant length; without one it follows the
         # project's, which is what the setting in the song dialog is.
@@ -620,7 +666,7 @@ class Engine(object):
             # render_live is what applies the bends; with no events it produces
             # the same samples as render, checked against it
             y = Renderer(program=program, bpm=bpm, voice=voice,
-                         voice_id=voice_id).render_live(
+                         voice_id=voice_id, level=level).render_live(
                 notes, [0] * len(notes), ev, lambda _t: bpm)
             i = int(round((at - start) * spb * SAMPLE_RATE))
             if i < 0:                     # the phrase began before the cursor

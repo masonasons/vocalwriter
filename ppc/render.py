@@ -190,8 +190,11 @@ class Note(object):
 
 class Renderer(object):
     def __init__(self, program=0, bpm=BPM, brightness=BRIGHTNESS, voice=None,
-                 voice_id=None):
+                 voice_id=None, level=1.0):
         self.brightness = brightness
+        #: what the whole voice is scaled by inside the engine, before it
+        #: clamps at full scale. 1.0 is the engine's own level.
+        self.level = level
         #: which voice of the bank to sing with. A program change reaches only
         #: the voices the bank's own map names; this reaches all of them, and
         #: `program` is what a song written down as program numbers still uses.
@@ -267,6 +270,8 @@ class Renderer(object):
         # always been: a note steps straight to its pitch.
         eng.defaults(glide=True)
         eng.volume(127)
+        if self.level != 1.0:
+            eng.level(self.level)
         # Only what has been moved off its default, so an unset control is
         # left exactly as the engine had it rather than re-stated slightly
         # differently through a 0-127 knob.
