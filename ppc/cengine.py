@@ -78,6 +78,8 @@ int vw_ed_voice(vw_editor *e, int index);
 int vw_ed_voice_needs_bank(vw_editor *e, int index);
 int vw_ed_has_bank(vw_editor *e);
 
+void vw_ed_oscillator(vw_editor *e, int32_t *phase, int32_t *len,
+                      int32_t *pitch);
 int vw_ed_reverb(vw_editor *e, float room, float wet);
 int vw_ed_reverberate(vw_editor *e, int16_t *samples, int32_t frames);
 """
@@ -338,6 +340,19 @@ class Editor(object):
             out.append('' if name == _ffi.NULL
                        else _ffi.string(name).decode('mac_roman', 'replace'))
         return out
+
+    def oscillator(self):
+        """(phase increment, wave length in samples, tuning) -- diagnostics.
+
+        The increment is 12-bit fixed point per output sample, so dividing it
+        by 4096 gives the rate the sample is being played at: 1.0 is the speed
+        it was recorded at.
+        """
+        phase = _ffi.new('int32_t *')
+        length = _ffi.new('int32_t *')
+        pitch = _ffi.new('int32_t *')
+        self._lib.vw_ed_oscillator(self._e, phase, length, pitch)
+        return phase[0], length[0], pitch[0]
 
     # -- the reverb --------------------------------------------------------
 

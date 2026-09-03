@@ -2,6 +2,9 @@ This is the build of the newest commit on `main`, replaced every time
 something lands. It is not a version: for those, see the
 [releases page](../../releases).
 
+`Read Me.txt` in the zip is the guide: the keys, what a song is made of, the
+voices, and what to do if something goes wrong.
+
 It runs as it stands — VocalWriter 2.0.1's dictionary, voices and engine
 tables are inside, and the synthesis is VocalWriter's own PowerPC code
 recreated in C, which renders a minute of singing in about half a second.

@@ -132,6 +132,17 @@ jobs:
       - name: Package
         run: pyinstaller --noconfirm VocalWriterStudio.spec
 
+      # The guide goes beside the program rather than inside it, so that
+      # someone who unzips the folder can read it without running anything.
+      - name: The guide, beside the program
+        shell: bash
+        run: |
+          if [ -d "dist/VocalWriterStudio" ]; then
+            cp docs/USING.md "dist/VocalWriterStudio/Read Me.txt"
+          else
+            cp docs/USING.md "dist/Read Me.txt"
+          fi
+
       - name: Zip it up (Windows)
         if: runner.os == 'Windows'
         run: |
@@ -144,7 +155,10 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           cd dist
-          ditto -c -k --sequesterRsrc --keepParent "VocalWriter Studio.app" ${{ matrix.asset }}.zip
+          mkdir -p "VocalWriter Studio"
+          mv "VocalWriter Studio.app" "VocalWriter Studio/"
+          mv "Read Me.txt" "VocalWriter Studio/"
+          ditto -c -k --sequesterRsrc --keepParent "VocalWriter Studio" ${{ matrix.asset }}.zip
 
       - uses: actions/upload-artifact@v4
         with:
