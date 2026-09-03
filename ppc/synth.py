@@ -41,12 +41,14 @@ G_OUTBUF = 0x2f94
 VOICE_PTRS = 0x200          # offset of the voice pointer array inside mvox
 GLOBALS_SIZE = 0x4000
 CONTEXT_SIZE = 0x4000
-#: The engine's output buffer, in halfwords: 23.8 seconds of audio. `SayFrame`
-#: writes 440 of them wherever waveIndex points and has nothing of its own to
-#: stop it, so a phrase longer than that walks off the end -- here into the
-#: interpreter's own memory, which merely corrupts the render. The C engine
-#: grows its buffer instead; see vw_ed_frames.
-OUT_SAMPLES = 1 << 21
+#: The engine's output buffer, in halfwords. `SayFrame` writes 440 of them
+#: wherever waveIndex points and has nothing of its own to stop it, so a phrase
+#: longer than the buffer walks off the end -- here into the interpreter's own
+#: memory, where it corrupted the engine's state and produced the "long renders
+#: drift" symptom this project carried as unsolved for months. 1 << 21 was
+#: 23.8 seconds, which is where that began; this is 95, and `Editor.frames`
+#: stops rather than passing it. The C engine grows its buffer instead.
+OUT_SAMPLES = 1 << 23
 
 
 class VocalWriter(object):
@@ -223,6 +225,8 @@ class Editor(object):
     def frames(self, count=1):
         done = 0
         while done < count:
+            if self.wave_index + 440 > OUT_SAMPLES:
+                break                    # rather than writing past the end
             self.m.call('e_Fill_Next_Frame', self.vw.ctx)
             self.m.call('SayFrame', self.vw.ctx)
             done += 1

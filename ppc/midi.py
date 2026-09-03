@@ -200,12 +200,15 @@ def build_notes(track, midi, limit=None):
 def segment(raw, sec, gap=0.30):
     """Split notes into phrases at rests, returning [(start_seconds, notes)].
 
-    Each phrase is rendered on a fresh engine. That is a workaround, not a
-    preference: a long continuous render drifts -- a resonator state grows over
-    roughly twenty seconds until it reaches infinity and the output pins to
-    full scale -- while the same notes from a fresh engine come out at the
-    original's own level. Splitting at silences also keeps absolute timing,
-    which a continuous render loses by compressing the rests.
+    Each phrase is rendered on a fresh engine, and what that is for is the
+    timing: a rest is a silence of an exact length, and a continuous render
+    has no way to hold one, so it compresses them and the song drifts off the
+    beat.
+
+    It used to be a workaround for something else as well -- a long render
+    pinned to full scale after about twenty seconds -- but that was the
+    engine's output buffer overrunning at 23.8 seconds and writing over its
+    own state, not a filter running away. The buffer grows now.
     """
     groups, cur = [], []
     cursor = None

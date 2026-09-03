@@ -611,11 +611,15 @@ class Engine(object):
 
         Rests are not sung. Each run of notes between them goes to its own
         engine and is placed at the time the score puts it, for two reasons.
-        A single continuous render drifts -- a resonator state grows until,
-        after something like twenty seconds, it reaches infinity and the output
-        pins to full scale -- and it also has no way to hold a silence, because
-        the engine only ever plays the next note it is handed. Cutting at a
-        silence costs nothing: there is no sound there to cut.
+        A continuous render has no way to hold a silence, because the engine
+        only ever plays the next note it is handed, so the rests would close
+        up and the song would drift off the beat. Cutting at a silence costs
+        nothing: there is no sound there to cut.
+
+        It was also, for a long time, how a render longer than twenty seconds
+        was avoided -- that one turned out to be the engine's output buffer
+        overrunning at 23.8 seconds rather than anything drifting, and it is
+        fixed.
 
         `start` is where playing begins, in beats. A phrase that is over by
         then is not rendered at all; one already under way is rendered whole

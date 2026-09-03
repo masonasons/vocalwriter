@@ -310,12 +310,23 @@ bright*. Both are true: the average is dominated by consonants, which are about
 tone control corrects them -- which is why fitting one produced a shallow,
 misleading optimum.
 
-**Long renders drift.** A continuous render of more than about twenty seconds
-grows until a filter state reaches infinity and the output pins to full scale.
-The cause is not the bends, the coefficients (pole radius 0.9929, exactly
-`exp(-pi*BW/44100)`) or the program changes, and the same notes are stable from
-a fresh engine. Unsolved; the renderer therefore splits a song into phrases at
-rests and starts each on a fresh engine, which also preserves absolute timing.
+**Long renders used to drift, and it was not drift.** A continuous render of
+more than about twenty seconds grew until the output pinned to full scale and
+then collapsed, which read like a filter state running away -- and it was not
+the bends, the coefficients or the program changes, and a fresh engine was
+always fine, so it went down as unsolved and the renderer split songs into
+phrases at rests to avoid it.
+
+It was the output buffer. `SayFrame` writes 440 halfwords wherever `waveIndex`
+points, with nothing of its own to stop it, and the buffer held 23.8 seconds:
+at 23.8 seconds the engine began writing over whatever came next, which
+included its own state. Under the interpreter that corrupted the render -- the
+level pinned, then fell to a twelfth, and a 35-second phrase ran on for 542
+seconds of nothing. In the C engine it is real memory, so it ended the program
+instead. The buffer grows now, and two minutes in one phrase holds a flat
+level from beginning to end (peak 0.958 to 0.968 across every ten-second
+window). Phrases are still split at rests, for the timing: a rest is a silence
+of an exact length, and a continuous render compresses it.
 
 **Speed.** A 60-second song renders in about half a second, cold. The
 interpreter it replaced runs at roughly a tenth of real time in one process --
