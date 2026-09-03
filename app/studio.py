@@ -1481,8 +1481,16 @@ class Frame(wx.Frame):
 
     def _ready(self, info):
         info = info or {}
-        self.say('engine ready: %s, Python %s'
-                 % (info.get('engine', 'unknown'), info.get('python', '')))
+        self.say('engine ready: %s, Python %s, %s voices'
+                 % (info.get('engine', 'unknown'), info.get('python', ''),
+                    info.get('voices', '?')))
+        if info.get('bank') is False:
+            # Without GMBank the voices built on its wavetables cannot be
+            # selected at all -- the engine reads a null pointer where the
+            # wave data should be -- so name the missing file rather than
+            # letting someone find out by choosing one.
+            self.say('the instrument bank, GMBank.rsrc, is missing: the '
+                     'voices with instrument names cannot be used')
 
     def _set_program_map(self, picks):
         self.program_map = {p: v for p, v in enumerate(picks or [])

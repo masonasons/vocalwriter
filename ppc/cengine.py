@@ -42,7 +42,7 @@ void vw_ed_close(vw_editor *e);
 
 void vw_ed_tempo_scale(vw_editor *e, float mul);
 void vw_ed_tempo(vw_editor *e, int bpm);
-void vw_ed_program(vw_editor *e, int program);
+int vw_ed_program(vw_editor *e, int program);
 int vw_ed_sequence(vw_editor *e, const unsigned char *blob, size_t len);
 void vw_ed_start(vw_editor *e);
 void vw_ed_defaults(vw_editor *e, int glide);
@@ -75,10 +75,21 @@ int vw_ed_voice_count(vw_editor *e);
 int vw_ed_program_voice(vw_editor *e, int program);
 const char *vw_ed_voice_name_at(vw_editor *e, int index);
 int vw_ed_voice(vw_editor *e, int index);
+int vw_ed_voice_needs_bank(vw_editor *e, int index);
+int vw_ed_has_bank(vw_editor *e);
 
 int vw_ed_reverb(vw_editor *e, float room, float wet);
 int vw_ed_reverberate(vw_editor *e, int16_t *samples, int32_t frames);
 """
+
+class MissingBank(RuntimeError):
+    """A voice was asked for that the instrument bank has to be there for.
+
+    The voices with instrument names are built on GMBank's wavetables, and
+    choosing one without them reads a null pointer inside the engine. The
+    library refuses instead; this is that refusal.
+    """
+
 
 _ffi = None
 _lib = None
@@ -205,7 +216,10 @@ class Editor(object):
         self._lib.vw_ed_tempo(self._e, int(bpm))
 
     def program(self, prog):
-        self._lib.vw_ed_program(self._e, int(prog))
+        if self._lib.vw_ed_program(self._e, int(prog)) == -2:
+            raise MissingBank(
+                'program %d picks a voice built on the instrument bank, and '
+                'GMBank.rsrc is not there' % int(prog))
 
     def sequence(self, blob):
         self._lib.vw_ed_sequence(self._e, blob, len(blob))
@@ -298,8 +312,17 @@ class Editor(object):
         A program change goes through the bank's own map, which does not name
         every voice it holds; this takes the voice's own place instead.
         """
-        if self._lib.vw_ed_voice(self._e, int(index)) != 0:
+        rc = self._lib.vw_ed_voice(self._e, int(index))
+        if rc == -2:
+            raise MissingBank(
+                '%s is built on the instrument bank, and GMBank.rsrc is not '
+                'there' % (self.voice_names()[int(index)] or index))
+        if rc != 0:
             raise ValueError('no voice %r in the bank' % (index,))
+
+    def needs_bank(self, index):
+        """Whether this voice is built on the wavetables."""
+        return self._lib.vw_ed_voice_needs_bank(self._e, int(index)) > 0
 
     def program_voice(self, program):
         """Which voice a program change would pick, for reading a song that

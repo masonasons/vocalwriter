@@ -59,21 +59,32 @@ def _complete(base):
 
 
 def _unpacked():
-    """Unpack the bundled archive once, and return where it went."""
+    """Unpack the bundled archive once, and return where it went.
+
+    Once, but not for ever: a build that carries a file the last one did not
+    has to unpack again, and an unpacked copy left behind by an older build
+    would otherwise be used in its place. That is not hypothetical -- the
+    instrument bank was added to the archive after the first builds went out,
+    and a copy without it makes the voices built on it unselectable. So every
+    file in the archive has to be there, not merely the four the synthesiser
+    cannot start without.
+    """
     dest = os.path.join(tempfile.gettempdir(), 'vocalwriter-assets')
-    if _complete(dest):
-        return dest
     for base in _candidates():
         archive = os.path.join(base, BUNDLE)
-        if os.path.isfile(archive):
-            try:
-                with zipfile.ZipFile(archive) as z:
-                    z.extractall(dest)
-            except (OSError, zipfile.BadZipFile):
-                return None
-            if _complete(dest):
-                return dest
-    return None
+        if not os.path.isfile(archive):
+            continue
+        try:
+            with zipfile.ZipFile(archive) as z:
+                names = [n for n in z.namelist() if not n.endswith('/')]
+                if all(os.path.exists(os.path.join(dest, n)) for n in names):
+                    return dest
+                z.extractall(dest)
+        except (OSError, zipfile.BadZipFile):
+            return None
+        if _complete(dest):
+            return dest
+    return dest if _complete(dest) else None
 
 
 def data_root():

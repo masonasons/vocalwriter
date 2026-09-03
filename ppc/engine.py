@@ -365,8 +365,13 @@ class Engine(object):
 
     def ping(self):
         """What is running, for the window to say out loud."""
+        eng = open_engine()
+        bank = bool(getattr(eng, 'has_bank', True))
+        voices = len([n for n in eng.voice_names() if n])
+        eng.close()
         return {'engine': engine_name(),
-                'python': '.'.join(str(v) for v in sys.version_info[:3])}
+                'python': '.'.join(str(v) for v in sys.version_info[:3]),
+                'voices': voices, 'bank': bank}
 
     def phonemes(self, words):
         out = {}
