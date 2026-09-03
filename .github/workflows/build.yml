@@ -40,6 +40,17 @@ jobs:
         with:
           submodules: true       # the synthesiser
 
+      # The commit recorded here says which engine the editor was last tested
+      # against; the build takes the newest one instead. The two repositories
+      # move together and the checks below are what say whether they still
+      # agree -- a recorded commit that someone forgot to move on would
+      # otherwise ship an engine older than the editor calling into it.
+      - name: The engine's latest
+        shell: bash
+        run: |
+          git submodule update --remote --merge engine
+          echo "engine: $(git -C engine log -1 --format='%h %s')"
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -66,28 +77,56 @@ jobs:
           sh engine/build.sh
           ls -l engine/build/libvocalwriter.*
 
-      # The whole program is that library. If it will not load there is
+      # The whole program is that library: if it will not load there is
       # nothing to ship, and a build that packages anyway is worse than one
-      # that stops here.
+      # that stops here. So this makes every call the editor makes into the
+      # engine, and an engine and an editor that no longer agree fail here
+      # rather than in someone's hands -- the dictionary, the whole voice
+      # bank, a wavetable voice at the level that keeps it inside full scale,
+      # the reverb, and a phrase longer than the engine's first buffer.
       - name: The synthesiser must load and sing
         shell: bash
         run: |
           python - <<'PY'
-          from ppc import cengine, render
+          import numpy as np
+          from ppc import cengine
           from ppc.engine import Engine
           print(cengine.describe())
           assert cengine.available(), cengine.REASON
           eng = Engine()
           print(eng.ping())
-          print('voices:', ', '.join(eng.voices()[:4]))
+          voices = eng.voices()
+          print('%d voices: %s ...' % (len(voices), ', '.join(voices[:4])))
+          assert len(voices) > 80, voices
           print('daisy:', eng.phonemes(['daisy']))
-          song = {'bpm': 100, 'tracks': [{'program': 0, 'volume': 1.0,
-                  'pan': 0.0, 'notes': [
-                      {'pitch': 67, 'beats': 1.0, 'phonemes': ['d', 'EY']},
-                      {'pitch': 65, 'beats': 1.0, 'phonemes': ['z', 'IY']}]}]}
-          res = eng.render(song, 'ci-check.wav')
-          print('rendered %.2f s' % res['seconds'])
+          assert eng.phonemes(['daisy'])['daisy']
+
+          def part(**kw):
+              base = {'program': 0, 'volume': 1.0, 'pan': 0.0, 'notes': [
+                  {'pitch': 67, 'beats': 1.0, 'phonemes': ['d', 'EY']},
+                  {'pitch': 65, 'beats': 1.0, 'phonemes': ['z', 'IY']}]}
+              base.update(kw)
+              return base
+
+          res = eng.render({'bpm': 100, 'tracks': [part()]}, 'ci-plain.wav')
+          print('plain: %.2f s' % res['seconds'])
           assert res['seconds'] > 1.0
+
+          strings = voices.index('Strings')
+          y, peak = eng._samples({'bpm': 100, 'reverb': {'room': 40, 'wet': 24},
+                                  'tracks': [part(voice_id=strings, pan=-0.5)]})
+          y = np.asarray(y)
+          clipped = int((np.abs(np.rint(y * 32768)) >= 32760).sum())
+          print('Strings with reverb: peak %.3f, %d samples clipped'
+                % (float(np.abs(y).max()), clipped))
+          assert clipped == 0, 'the wavetable voices are clipping again'
+          assert y.ndim == 2, 'the reverb should have made it stereo'
+
+          long_part = part(notes=[{'pitch': 60 + (i % 5), 'beats': 0.5,
+                                   'phonemes': ['AA']} for i in range(160)])
+          res = eng.render({'bpm': 120, 'tracks': [long_part]}, 'ci-long.wav')
+          print('one phrase of 160 notes: %.1f s' % res['seconds'])
+          assert res['seconds'] > 30, 'the output buffer stopped growing'
           PY
 
       - name: Package
