@@ -28,6 +28,7 @@ import wx.adv
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from app.lists import ReportList                             # noqa: E402
 from app import project                                      # noqa: E402
 from app.engine import Engine                                # noqa: E402
 from app.player import PLAYING, Player                        # noqa: E402
@@ -461,7 +462,7 @@ class AddWordDialog(wx.Dialog):
         self.beats.Bind(wx.EVT_KILL_FOCUS, self.on_beats)
         labelled(self, outer, 'Beats', self.beats, hint='for each note')
 
-        self.list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL,
+        self.list = ReportList(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL,
                                 size=(380, 140))
         for i, (head, width) in enumerate(COLUMNS[:3]):
             self.list.InsertColumn(i, head, width=width)
@@ -667,7 +668,7 @@ class BendDialog(wx.Dialog):
         self.points = list(note.bend)
 
         outer = wx.BoxSizer(wx.VERTICAL)
-        self.list = wx.ListCtrl(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL,
+        self.list = ReportList(self, style=wx.LC_REPORT | wx.LC_SINGLE_SEL,
                                 size=(340, 170))
         self.list.InsertColumn(0, 'Position', width=150)
         self.list.InsertColumn(1, 'Semitones', width=150)
@@ -982,7 +983,7 @@ class Frame(wx.Frame):
         # The tracks come before the notes, so that Tab runs down the window
         # in the order the song is put together: which part, then what it
         # sings.
-        self.tracks_list = wx.ListCtrl(
+        self.tracks_list = ReportList(
             p, style=wx.LC_REPORT | wx.LC_SINGLE_SEL, size=(-1, 110))
         for i, (head, width) in enumerate(TRACK_COLUMNS):
             self.tracks_list.InsertColumn(i, head, width=width)
@@ -993,7 +994,7 @@ class Frame(wx.Frame):
 
         # not single-select: a phrase is copied, transposed or deleted as
         # a whole, and Shift with the arrow keys is how that is reached
-        self.list = wx.ListCtrl(p, style=wx.LC_REPORT)
+        self.list = ReportList(p, style=wx.LC_REPORT)
         for i, (head, width) in enumerate(COLUMNS):
             self.list.InsertColumn(i, head, width=width)
         self.list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self.on_edit)
@@ -1280,7 +1281,10 @@ class Frame(wx.Frame):
     def on_track_chosen(self, evt):
         """Moving down the tracks list changes what the notes list shows."""
         evt.Skip()
-        i = evt.GetIndex()
+        # Not evt.GetIndex(): the selection event of the control used on
+        # platforms where wx.ListCtrl is not accessible carries no row. The
+        # list itself knows, and answers the same on both.
+        i = self.tracks_list.GetFirstSelected()
         if self._switching or i == self.current or not (0 <= i
                                                         < len(self.tracks)):
             return
