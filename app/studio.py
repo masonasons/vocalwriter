@@ -2131,12 +2131,17 @@ class Frame(wx.Frame):
         elif notes is None:
             parts = project.audible(self.tracks)
         else:
-            # hearing one note should sound like the track it is in, so it
-            # borrows that track's voice settings as well as its program
-            parts = [project.Track(program=self.track.program, notes=notes,
-                                   voice=getattr(self.track, 'voice', None),
-                                   consonants=getattr(self.track,
-                                                      'consonants', None))]
+            # Hearing one note should sound like the part it is in, so the
+            # part is copied whole and given that one note. Copying only some
+            # of it is what made a preview go on using the voice, the pan and
+            # the level the track had before you changed them.
+            t = self.track
+            parts = [project.Track(
+                name=t.name, program=t.program, volume=t.volume, pan=t.pan,
+                voice=getattr(t, 'voice', None),
+                consonants=getattr(t, 'consonants', None),
+                reverb=getattr(t, 'reverb', None),
+                voice_id=self.track_voice(t), notes=notes)]
         return {'bpm': float(self.bpm),
                 'consonants': self.consonant_pct / 100.0,
                 'start': round(float(start), 6),

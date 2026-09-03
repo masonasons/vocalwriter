@@ -41,6 +41,11 @@ G_OUTBUF = 0x2f94
 VOICE_PTRS = 0x200          # offset of the voice pointer array inside mvox
 GLOBALS_SIZE = 0x4000
 CONTEXT_SIZE = 0x4000
+#: The engine's output buffer, in halfwords: 23.8 seconds of audio. `SayFrame`
+#: writes 440 of them wherever waveIndex points and has nothing of its own to
+#: stop it, so a phrase longer than that walks off the end -- here into the
+#: interpreter's own memory, which merely corrupts the render. The C engine
+#: grows its buffer instead; see vw_ed_frames.
 OUT_SAMPLES = 1 << 21
 
 
