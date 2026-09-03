@@ -56,6 +56,8 @@ CTX_STATE = 0x1050
 CTX_WAIT = 0x10ba
 CTX_OUT_POS = 0x1080
 CTX_AV = 0x316
+#: the glide table the portamento control reads, as a pointer in the context
+CTX_GLIDE_TBL = 0x1070
 G_TEMPO_SCALE = 0x3274
 G_FRAMES_PER_BEAT = 0x3268
 
@@ -94,10 +96,12 @@ BRIGHTNESS = 1.0
 #: perfectly: colour's default mix is 0.75 and the nearest the 0-127 control
 #: can say is 95, or 0.748.
 #:
-#: Portamento is not here. `Speech_Portamento` reads a table at ctx[0x1070]
-#: that nothing fills, so it returns zero for every input and changes the audio
-#: by exactly nothing -- the same gap as the letter-to-sound tables. There is
-#: no point offering a control that cannot do anything.
+#: Portamento reads a table through ctx[0x1070], which is a pointer the
+#: application fills in `Synth_Startup` -- part of its audio startup, not of
+#: the synthesis path -- so it used to point at a blank buffer here and the
+#: control did nothing. The table is `_g_Time_Tbl`, which `InitSharedTables`
+#: does load; see `_voice_controls` for where the two are joined up, and why
+#: that happens after the defaults are set rather than before.
 VOICE_CONTROLS = (
     ('color', 'Speech_Color', 95, 0, 127, 'Colour',
      'brighter voice as it rises'),
@@ -108,6 +112,8 @@ VOICE_CONTROLS = (
     ('breath', 'Speech_Breath', 0, 0, 127, 'Breath', 'adds air to the tone'),
     ('detune', 'Speech_Detune', 0, -8192, 8191, 'Detune',
      'a shade sharp or flat'),
+    ('portamento', 'Speech_Portamento', 0, 0, 127, 'Portamento',
+     'glide between notes; 0 goes straight there'),
 )
 
 #: {key: default}
@@ -226,6 +232,19 @@ class Renderer(object):
         """
         m = vw.m
         m.call('InitDefaultVoiceCntrls', vw.ctx)
+        # The glide table. `InitGlobals_Speech` copied g[0x2e9c] into
+        # ctx[0x1070] long before there was a table there -- the application
+        # fills that global in `Synth_Startup` -- so point the context at the
+        # one `InitSharedTables` loaded.
+        #
+        # After the defaults on purpose. The engine's own default portamento
+        # is read out of this same table, so wiring it any earlier would put a
+        # glide on every note of every song ever rendered here. VocalWriter's
+        # own renders do not glide -- measured against them, note change for
+        # note change -- so the default stays what it has always been: nothing
+        # in ctx[0x1060], and a note steps straight to its pitch.
+        m.mem.w32(vw.ctx + CTX_GLIDE_TBL,
+                  m.mem.r32(m.globals_ptr('_g_Time_Tbl')))
         m.call('Speech_Volume', vw.g, 0, 127)
         m.call('SetTotalVolume', vw.ctx)
         # Only what has been moved off its default, so an unset control is

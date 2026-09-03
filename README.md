@@ -128,7 +128,7 @@ A song is made of **tracks**, each with its own voice, volume, pan and notes.
 |---|---|
 | F6 | between the tracks list and the notes list |
 | Ctrl+T | add a track |
-| Enter on a track | its name, voice, volume and pan |
+| Enter on a track | its name, voice, volume, pan and voice controls |
 | M / S on a track | mute / solo |
 | Delete on a track | remove it |
 | Ctrl+Up / Ctrl+Down | reorder the parts |
@@ -144,6 +144,7 @@ A song is made of **tracks**, each with its own voice, volume, pan and notes.
 | Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+A | copy, cut, paste, select all |
 | Ctrl+Up / Ctrl+Down | move a note earlier or later |
 | Ctrl+G | go to a bar |
+| Ctrl+, | song settings: tempo, time signature, consonants, voice controls |
 | Space | play from the cursor, or stop |
 | Ctrl+P / Ctrl+H / Ctrl+M / Ctrl+. | play from the start / hear one note / metronome / stop |
 | Ctrl+O / Ctrl+S | open and save a project |
@@ -155,6 +156,20 @@ The picker inside the note editor offers **all 56** phonemes the engine can
 pronounce -- the application's own palette shows fifty, and the seven it leaves
 out are real, with formants and durations like any other, so they are here too.
 The fifty-seventh is silence, which is a rest rather than a phoneme.
+
+What belongs to the whole song -- the tempo, the time signature, how long the
+consonants are, and the engine's own voice controls -- is set once in the song
+settings and then left alone, which is why it is behind Ctrl+comma rather than
+in the window. A part follows the song's consonant length and voice controls
+until it is given its own in the track dialog, so setting the vibrato for a
+piece is one number in one place rather than the same number typed into every
+track.
+
+The voice controls are the engine's: colour, vibrato depth and rate, chorus,
+breath, detune and portamento -- the glide between notes. Which of them do
+anything was settled by measuring rather than by reading their names. Nothing
+is sent to the engine unless it has been moved off the engine's own default, so
+a song that sets none of them renders exactly as it did before they existed.
 
 Pitch bend belongs to the note and is written as the points it passes through,
 so it survives the note being retimed, transposed or moved. Projects are plain
