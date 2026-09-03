@@ -281,10 +281,12 @@ The cause is not the bends, the coefficients (pole radius 0.9929, exactly
 a fresh engine. Unsolved; the renderer therefore splits a song into phrases at
 rests and starts each on a fresh engine, which also preserves absolute timing.
 
-**Speed.** A 60-second song renders in about half a second. It used to take
-a minute and a half, which is what the phrase-by-phrase machinery and the
-render cache were built around; both are still here, because rests still have
-to be exact and a song still gets played over and over.
+**Speed.** A 60-second song renders in about half a second, cold. The
+interpreter it replaced runs at roughly a tenth of real time in one process --
+85 seconds of singing took 8 seconds of CPU with the compiled core, and far
+longer before that -- which is what the phrase-by-phrase machinery and the
+render cache were built around. Both are still here: rests still have to be
+exact, and a song still gets played over and over.
 
 Cutting phrases into smaller pieces to spread them over more cores does not
 work, and that has not changed: the engine carries much more state across a
