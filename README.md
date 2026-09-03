@@ -55,14 +55,15 @@ VocalWriter 2.0.1's own data files are in this repository, so a clone runs:
 ```
 assets/EnglishLex                              the dictionary
 assets/GMSpeech.rsrc                           the voices
+assets/GMBank.rsrc                             the wavetables under them
 assets/VocalWriter.app/.../VocalWriter.rsrc    the engine's tables
 assets/VocalWriter.app/.../MacOS/VocalWriter   the PowerPC binary
 ```
 
 They are the work of KAE Labs, 2005, and are still theirs -- not covered by
 this project's licence. See [NOTICE](NOTICE). Everything else of the
-application -- the demo songs, the tutorial, the manual, the instrument bank
--- is not needed to run this and is not here.
+application -- the demo songs, the tutorial, the manual -- is not needed to
+run this and is not here.
 
 The synthesis itself is in the `engine` submodule
 ([VocalWriterC](https://github.com/masonasons/VocalWriterC)): VocalWriter's
@@ -102,6 +103,14 @@ Windows to guess it from whatever static text happens to precede it, which is
 wrong more often than not. Nothing is conveyed by colour or position alone.
 
 A song is made of **tracks**, each with its own voice, volume, pan and notes.
+There are **87 voices**, and the ones with instrument names sing as readily as
+the ones with people's names: "special synthetic models of musical instruments
+with dynamic vocal tracts", as VocalWriter's manual puts it, so Strings and
+Trumpet sing the lyrics too. Five of them -- Miles, Ellen1, Kae1, Sonny1 and
+Ed1 -- sit in the bank with nothing in its program map pointing at them, and
+are reachable here because a voice is chosen by its place in the bank rather
+than by a program change. The instrument voices come out about three times as
+loud as Robert; the track's volume is the place to fix that.
 
 | | |
 |---|---|

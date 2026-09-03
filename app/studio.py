@@ -973,10 +973,12 @@ class TrackDialog(wx.Dialog):
         self.name = wx.TextCtrl(self, value=track.name, size=(220, -1))
         labelled(self, outer, 'Name', self.name)
 
+        # Every voice the bank holds, in its own order: the people's names
+        # first, then the instruments, which sing too.
         names = studio.voice_names or ['Robert']
         self.voice = wx.Choice(self, choices=names, size=(180, -1))
-        self.voice.SetSelection(studio.programs.index(track.program)
-                                if track.program in studio.programs else 0)
+        self.voice.SetSelection(min(max(0, studio.track_voice(track)),
+                                    len(names) - 1))
         labelled(self, outer, 'Voice', self.voice)
 
         self.volume = wx.SpinCtrl(self, min=0, max=100, initial=track.volume,
@@ -1055,11 +1057,9 @@ class TrackDialog(wx.Dialog):
         self.name.SetInsertionPointEnd()
 
     def result(self):
-        """(name, program, volume, pan)."""
+        """(name, voice, volume, pan). The voice is its place in the bank."""
         i = self.voice.GetSelection()
-        program = (self.studio.programs[i]
-                   if 0 <= i < len(self.studio.programs) else 0)
-        return (self.name.GetValue().strip() or 'Voice', program,
+        return (self.name.GetValue().strip() or 'Voice', max(0, i),
                 self.volume.GetValue(), self.pan.GetValue())
 
     def on_own_voice(self, _evt):
@@ -1111,7 +1111,6 @@ class Frame(wx.Frame):
         self.anticipate = True
         self.current = 0
         self._switching = False
-        self.programs = [0]
         self.voice_names = ['Robert']
         self.palette = []
         self.wav = os.path.join(tempfile.gettempdir(), 'vw_studio.wav')
@@ -1122,6 +1121,10 @@ class Frame(wx.Frame):
         self.path = None            # the project file, once it has one
         self.dirty = False
 
+        #: program number -> the voice of the bank it picks, filled in when
+        #: the engine answers. Only songs written before the whole bank was
+        #: offered need it.
+        self.program_map = {}
         #: how you like to work, kept between songs and between sittings
         self.settings = settings.load()
         #: the timer that waits for the nudging to stop before previewing
@@ -1137,6 +1140,9 @@ class Frame(wx.Frame):
         self.engine.send('palette',
                          lambda r: wx.CallAfter(self._set_palette, r))
         self.engine.voices(lambda r: wx.CallAfter(self._set_voices, r))
+        self.engine.send('program_voices',
+                         lambda r: wx.CallAfter(self._set_program_map, r),
+                         programs=list(range(128)))
         self.Bind(wx.EVT_CLOSE, self.on_close)
 
     #: The notes of whichever track is selected. Everything that edits notes
@@ -1478,20 +1484,32 @@ class Frame(wx.Frame):
         self.say('engine ready: %s, Python %s'
                  % (info.get('engine', 'unknown'), info.get('python', '')))
 
+    def _set_program_map(self, picks):
+        self.program_map = {p: v for p, v in enumerate(picks or [])
+                            if v is not None}
+        self.sync_tracks(select=self.current)
+
+    def track_voice(self, track):
+        """Which voice of the bank a part sings with.
+
+        A part written down before the whole bank was offered carries a
+        program number instead; the engine says what that program picks, and
+        it is turned into a place in the bank the first time it is asked for,
+        so nothing is lost and nothing has to be converted twice.
+        """
+        if getattr(track, 'voice_id', None) is None:
+            track.voice_id = self.program_map.get(track.program, 0)
+        return track.voice_id
+
     def _set_voices(self, names):
-        seen, uniq = set(), []
-        for i, n in enumerate(names):
-            if n not in seen:
-                seen.add(n)
-                uniq.append((i, n))
-        self.programs = [i for i, _ in uniq]
-        self.voice_names = [n for _, n in uniq]
+        self.voice_names = list(names) or ['Robert']
         self.sync_tracks(select=self.current)   # the Voice column can now say
 
-    def voice_name(self, program):
-        if program in self.programs:
-            return self.voice_names[self.programs.index(program)]
-        return 'program %d' % program
+    def voice_name(self, index):
+        """What the voice at that place in the bank is called."""
+        if 0 <= index < len(self.voice_names):
+            return self.voice_names[index]
+        return 'voice %d' % index
 
     def _set_palette(self, rows):
         self.palette = rows or []
@@ -1529,7 +1547,7 @@ class Frame(wx.Frame):
     def refresh_track(self, i):
         t = self.tracks[i]
         self.tracks_list.SetItem(i, 0, t.name)
-        self.tracks_list.SetItem(i, 1, self.voice_name(t.program))
+        self.tracks_list.SetItem(i, 1, self.voice_name(self.track_voice(t)))
         self.tracks_list.SetItem(i, 2, '%d%%' % t.volume)
         self.tracks_list.SetItem(i, 3, project.pan_text(t.pan))
         self.tracks_list.SetItem(i, 4, self.track_state(t))
@@ -1566,7 +1584,8 @@ class Frame(wx.Frame):
         relabel(self.list, 'Notes in %s' % t.name)
         self.sync(select=t.cursor)
         self.say('%s, %s, %d note%s, %s'
-                 % (t.name, self.voice_name(t.program), len(t.notes),
+                 % (t.name, self.voice_name(self.track_voice(t)),
+                    len(t.notes),
                     '' if len(t.notes) == 1 else 's', self.track_state(t)))
 
     def on_track_key(self, evt):
@@ -1630,7 +1649,7 @@ class Frame(wx.Frame):
         t = self.tracks[i]
         dlg = TrackDialog(self, self, t)
         if dlg.ShowModal() == wx.ID_OK:
-            t.name, t.program, t.volume, t.pan = dlg.result()
+            t.name, t.voice_id, t.volume, t.pan = dlg.result()
             dlg.apply_voice(t)
             self.touch()
             self.refresh_track(i)
@@ -1638,7 +1657,8 @@ class Frame(wx.Frame):
                 relabel(self.list, 'Notes in %s' % t.name)
             reannounce(self.tracks_list, i)
             self.say('%s, %s, volume %d%%, %s, %s'
-                     % (t.name, self.voice_name(t.program), t.volume,
+                     % (t.name, self.voice_name(self.track_voice(t)),
+                        t.volume,
                         project.pan_text(t.pan),
                         'its own voice controls' if t.voice is not None
                         else "the song's voice controls"))
@@ -2095,7 +2115,7 @@ class Frame(wx.Frame):
 
     def program(self):
         """The voice of the track being worked on, for previews."""
-        return self.track.program
+        return self.track_voice(self.track)
 
     def song(self, notes=None, start=0.0, tracks=None):
         """The whole song as the engine wants it.
@@ -2137,6 +2157,7 @@ class Frame(wx.Frame):
             voice = self.song_voice
         own_reverb = getattr(t, 'reverb', None)
         return {'program': t.program,
+                'voice_id': self.track_voice(t),
                 'volume': t.volume / 100.0,
                 'pan': t.pan / 100.0,
                 'voice': dict(voice or {}),
@@ -2425,7 +2446,7 @@ class Frame(wx.Frame):
             name=t['name'], program=t['program'], volume=t['volume'],
             pan=t['pan'], mute=t['mute'], solo=t['solo'],
             voice=t.get('voice'), consonants=t.get('consonants'),
-            reverb=t.get('reverb'),
+            reverb=t.get('reverb'), voice_id=t.get('voice_id'),
             notes=[Note(ph, pitch, beats, word, bend)
                    for ph, pitch, beats, word, bend in t['rows']])
             for t in tracks]
@@ -2557,7 +2578,7 @@ class Frame(wx.Frame):
         if len(got) > 1:
             self.say('every part is singing in %s. Enter on a track gives it '
                      'its own voice, volume and pan.'
-                     % self.voice_name(program))
+                     % self.voice_name(self.program_map.get(program, 0)))
         # which track each word landed on, since a lookup comes back for the
         # whole file at once
         pending = [(k, word, indices)

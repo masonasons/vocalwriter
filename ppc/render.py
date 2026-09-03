@@ -189,8 +189,13 @@ class Note(object):
 
 
 class Renderer(object):
-    def __init__(self, program=0, bpm=BPM, brightness=BRIGHTNESS, voice=None):
+    def __init__(self, program=0, bpm=BPM, brightness=BRIGHTNESS, voice=None,
+                 voice_id=None):
         self.brightness = brightness
+        #: which voice of the bank to sing with. A program change reaches only
+        #: the voices the bank's own map names; this reaches all of them, and
+        #: `program` is what a song written down as program numbers still uses.
+        self.voice_id = voice_id
         self.voice = clean_voice(voice)
         self.blob = load()
         self.order = phoneme_order(self.blob)
@@ -236,7 +241,10 @@ class Renderer(object):
         eng.tempo_scale(TEMPO_SCALE)
         eng.tempo(int(self.bpm))
         blob, _n = self._sequence(notes)
-        eng.program(self.program if program is None else program)
+        if program is None and self.voice_id is not None:
+            eng.voice(self.voice_id)
+        else:
+            eng.program(self.program if program is None else program)
         eng.sequence(blob)
         eng.start()
         self._voice_controls(eng)

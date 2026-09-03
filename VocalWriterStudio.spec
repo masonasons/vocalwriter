@@ -48,6 +48,7 @@ core = []
 # were part of this program, and fails. Inside an archive it is just data.
 APP = 'assets/VocalWriter.app/Contents'
 ASSETS = ('assets/EnglishLex', 'assets/GMSpeech.rsrc',
+          'assets/GMBank.rsrc',
           APP + '/MacOS/VocalWriter', APP + '/Resources/VocalWriter.rsrc')
 
 import zipfile

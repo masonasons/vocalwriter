@@ -11,6 +11,7 @@ distributed here:
 
     assets/EnglishLex                              the dictionary
     assets/GMSpeech.rsrc                           the voice bank
+    assets/GMBank.rsrc                             the wavetables
     assets/VocalWriter.app/.../VocalWriter.rsrc    the engine's tables
     assets/VocalWriter.app/.../MacOS/VocalWriter   the PowerPC binary
     assets/License Agreement.rtf                   their licence

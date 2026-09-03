@@ -365,16 +365,26 @@ class Engine(object):
         return out
 
     def voices(self):
-        """The voice each program number selects, as the bank maps them."""
+        """Every voice the bank holds, in its own order.
+
+        Not the sixteen a program change reaches: the bank has 87, and the
+        ones with instrument names sing lyrics as readily as the ones with
+        people's names -- "special synthetic models of musical instruments
+        with dynamic vocal tracts", as the manual has it. Five more sit in the
+        bank with nothing in the program map pointing at them at all.
+        """
         if self._voices is None:
             eng = open_engine()
-            names = []
-            for prog in range(16):
-                eng.program(prog)
-                names.append(eng.voice_name())
+            self._voices = [n for n in eng.voice_names() if n]
             eng.close()
-            self._voices = names
         return self._voices
+
+    def program_voices(self, programs):
+        """Which voice each program number picks, for reading an old song."""
+        eng = open_engine()
+        out = [eng.program_voice(int(p)) for p in programs]
+        eng.close()
+        return out
 
     def palette(self):
         """Every phoneme the engine has, with an example word for each.
@@ -570,6 +580,7 @@ class Engine(object):
         spb = 60.0 / max(bpm, 1e-6)
         vel = int(track.get('velocity', 64))
         program = int(track.get('program', 0))
+        voice_id = track.get('voice_id')
         voice = track.get('voice') or None
         # A part may set its own consonant length; without one it follows the
         # project's, which is what the setting in the song dialog is.
@@ -608,7 +619,8 @@ class Engine(object):
                              at * spb, (at + span) * spb)
             # render_live is what applies the bends; with no events it produces
             # the same samples as render, checked against it
-            y = Renderer(program=program, bpm=bpm, voice=voice).render_live(
+            y = Renderer(program=program, bpm=bpm, voice=voice,
+                         voice_id=voice_id).render_live(
                 notes, [0] * len(notes), ev, lambda _t: bpm)
             i = int(round((at - start) * spb * SAMPLE_RATE))
             if i < 0:                     # the phrase began before the cursor

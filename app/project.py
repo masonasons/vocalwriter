@@ -59,9 +59,15 @@ class Track(object):
 
     def __init__(self, name='', program=0, volume=100, pan=0,
                  mute=False, solo=False, notes=None, voice=None,
-                 consonants=None, reverb=None):
+                 consonants=None, reverb=None, voice_id=None):
         self.name = name
+        #: which program change this part used to be, kept for songs written
+        #: down before voices were chosen out of the bank by name
         self.program = int(program)
+        #: which voice of the bank sings this part. There are 87, and the ones
+        #: with instrument names sing as readily as the ones with people's
+        #: names. None means the program above still decides.
+        self.voice_id = None if voice_id is None else int(voice_id)
         self.volume = int(volume)
         self.pan = int(pan)
         self.mute = bool(mute)
@@ -185,6 +191,8 @@ def _voice_doc(values):
 
 def _track_doc(t):
     doc = {'name': t.name, 'program': int(t.program),
+           'voice_id': (None if getattr(t, 'voice_id', None) is None
+                        else int(t.voice_id)),
            'volume': int(t.volume), 'pan': int(t.pan),
            'mute': bool(t.mute), 'solo': bool(t.solo),
            'notes': [_note_doc(n) for n in t.notes]}
@@ -254,6 +262,8 @@ def _read_track(doc, index=0):
     except (TypeError, ValueError):
         con = None
     return {'name': doc.get('name') or ('Voice %d' % (index + 1)),
+            'voice_id': (_int(doc['voice_id'], 0)
+                         if doc.get('voice_id') is not None else None),
             'voice': (clean_voice(doc['voice']) if 'voice' in doc else None),
             'reverb': (clean_reverb(doc['reverb']) if 'reverb' in doc
                        else None),

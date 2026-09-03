@@ -87,6 +87,9 @@ class Engine(object):
     def voices(self, cb):
         self.send('voices', cb)
 
+    def program_voices(self, programs, cb):
+        self.send('program_voices', cb, programs=list(programs))
+
     def render(self, song, out, cb):
         self.send('render', cb, song=song, out=out)
 

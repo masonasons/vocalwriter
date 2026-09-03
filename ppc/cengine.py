@@ -69,6 +69,12 @@ int vw_ed_lexicon(vw_editor *e, const unsigned char *data, size_t len);
 int vw_ed_word(vw_editor *e, const char *text, unsigned char *out);
 const char *vw_ed_phoneme_name(int code);
 
+int vw_ed_bank(vw_editor *e, const unsigned char *fork, size_t len);
+int vw_ed_voice_count(vw_editor *e);
+int vw_ed_program_voice(vw_editor *e, int program);
+const char *vw_ed_voice_name_at(vw_editor *e, int index);
+int vw_ed_voice(vw_editor *e, int index);
+
 int vw_ed_reverb(vw_editor *e, float room, float wet);
 int vw_ed_reverberate(vw_editor *e, int16_t *samples, int32_t frames);
 """
@@ -157,6 +163,7 @@ class Editor(object):
         rsrc = rsrc or paths.asset('assets', 'VocalWriter.app', 'Contents',
                                    'Resources', 'VocalWriter.rsrc')
         gmspeech = gmspeech or paths.asset('assets', 'GMSpeech.rsrc')
+        gmbank = paths.asset('assets', 'GMBank.rsrc')
         with open(rsrc, 'rb') as fh:
             self._rsrc = fh.read()
         with open(gmspeech, 'rb') as fh:
@@ -166,6 +173,16 @@ class Editor(object):
         if self._e == _ffi.NULL:
             raise RuntimeError('the C engine would not start: check %s and %s'
                                % (rsrc, gmspeech))
+        # The voices with instrument names are built on the wavetables in
+        # GMBank, and cannot be selected at all without it. It is not needed
+        # to sing with the natural voices, so a copy that lacks it still
+        # works, with fewer voices to choose from.
+        self.has_bank = False
+        if os.path.isfile(gmbank):
+            with open(gmbank, 'rb') as fh:
+                self._bank = fh.read()
+            self.has_bank = lib.vw_ed_bank(self._e, self._bank,
+                                           len(self._bank)) == 0
 
     def close(self):
         if getattr(self, '_e', None):
@@ -265,6 +282,30 @@ class Editor(object):
         if name == _ffi.NULL:
             return ''
         return _ffi.string(name).decode('mac_roman', 'replace')
+
+    def voice(self, index):
+        """Sing with the voice at that place in the bank.
+
+        A program change goes through the bank's own map, which does not name
+        every voice it holds; this takes the voice's own place instead.
+        """
+        if self._lib.vw_ed_voice(self._e, int(index)) != 0:
+            raise ValueError('no voice %r in the bank' % (index,))
+
+    def program_voice(self, program):
+        """Which voice a program change would pick, for reading a song that
+        was written down as program numbers."""
+        got = self._lib.vw_ed_program_voice(self._e, int(program))
+        return None if got < 0 else got
+
+    def voice_names(self):
+        """Every voice in the bank, in its own order."""
+        out = []
+        for i in range(self._lib.vw_ed_voice_count(self._e)):
+            name = self._lib.vw_ed_voice_name_at(self._e, i)
+            out.append('' if name == _ffi.NULL
+                       else _ffi.string(name).decode('mac_roman', 'replace'))
+        return out
 
     # -- the reverb --------------------------------------------------------
 

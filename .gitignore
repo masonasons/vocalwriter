@@ -4,6 +4,9 @@
 #
 #   assets/EnglishLex                            the dictionary
 #   assets/GMSpeech.rsrc                         the voices
+#   assets/GMBank.rsrc                           the wavetables the voices
+#                                                with instrument names are
+#                                                built on
 #   assets/VocalWriter.app/.../VocalWriter.rsrc  the engine's tables
 #   assets/VocalWriter.app/.../MacOS/VocalWriter the PowerPC binary, which the
 #                                                interpreter and the C engine's
@@ -13,6 +16,7 @@
 # instrument bank -- is not needed to run it and is not here.
 assets/*
 !assets/EnglishLex
+!assets/GMBank.rsrc
 !assets/GMSpeech.rsrc
 !assets/License Agreement.rtf
 !assets/VocalWriter.app/
