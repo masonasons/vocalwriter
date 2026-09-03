@@ -48,7 +48,12 @@ jobs:
       - name: The engine's latest
         shell: bash
         run: |
-          git submodule update --remote --merge engine
+          # Fetch and check out, rather than `submodule update --remote
+          # --merge`: the checkout above clones the submodule shallowly, and
+          # merging a commit whose history does not reach into that shallow
+          # window is refused outright ("unrelated histories").
+          git -C engine fetch --depth 1 origin master
+          git -C engine checkout --detach FETCH_HEAD
           echo "engine: $(git -C engine log -1 --format='%h %s')"
 
       - uses: actions/setup-python@v5
@@ -134,18 +139,13 @@ jobs:
 
       # The guide goes beside the program rather than inside it, so that
       # someone who unzips the folder can read it without running anything.
-      - name: The guide, beside the program
-        shell: bash
-        run: |
-          if [ -d "dist/VocalWriterStudio" ]; then
-            cp docs/USING.md "dist/VocalWriterStudio/Read Me.txt"
-          else
-            cp docs/USING.md "dist/Read Me.txt"
-          fi
-
+      # Each platform puts it where that platform's folder is: on macOS the
+      # build makes both the collected folder and the .app, so choosing by
+      # what exists picks the wrong one.
       - name: Zip it up (Windows)
         if: runner.os == 'Windows'
         run: |
+          cp docs/USING.md "dist/VocalWriterStudio/Read Me.txt"
           cd dist
           7z a -tzip ${{ matrix.asset }}.zip VocalWriterStudio
 
@@ -157,7 +157,7 @@ jobs:
           cd dist
           mkdir -p "VocalWriter Studio"
           mv "VocalWriter Studio.app" "VocalWriter Studio/"
-          mv "Read Me.txt" "VocalWriter Studio/"
+          cp ../docs/USING.md "VocalWriter Studio/Read Me.txt"
           ditto -c -k --sequesterRsrc --keepParent "VocalWriter Studio" ${{ matrix.asset }}.zip
 
       - uses: actions/upload-artifact@v4
