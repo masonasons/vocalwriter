@@ -36,13 +36,23 @@ ASSETS = ('assets/EnglishLex', 'assets/GMSpeech.rsrc',
           APP + '/MacOS/VocalWriter', APP + '/Resources/VocalWriter.rsrc')
 
 import zipfile
-os.makedirs('build', exist_ok=True)
-bundle = os.path.join('build', 'assets_bundle.zip')
-with zipfile.ZipFile(bundle, 'w', zipfile.ZIP_DEFLATED) as z:
-    for rel in ASSETS:
-        z.write(rel, rel)
-
-data = [('emu/phoneme_palette.json', 'emu'), (bundle, '.')]
+data = [('emu/phoneme_palette.json', 'emu')]
+absent = [rel for rel in ASSETS if not os.path.isfile(rel)]
+if absent:
+    # A build without them is a real thing to want: it is what continuous
+    # integration can make in public, and what anyone can build from a clean
+    # checkout. `ppc/paths.py` looks for an `assets` folder beside the
+    # executable, so the recipient supplies their own copy and the program
+    # says as much on startup if they have not.
+    print('*** building WITHOUT the VocalWriter files: %s'
+          % ', '.join(absent))
+else:
+    os.makedirs('build', exist_ok=True)
+    bundle = os.path.join('build', 'assets_bundle.zip')
+    with zipfile.ZipFile(bundle, 'w', zipfile.ZIP_DEFLATED) as z:
+        for rel in ASSETS:
+            z.write(rel, rel)
+    data.append((bundle, '.'))
 
 a = Analysis(
     ['launch.py'],

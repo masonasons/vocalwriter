@@ -38,6 +38,14 @@ emu/out/  reference audio rendered by VocalWriter itself, for comparison
 out/      rendered audio
 ```
 
+## Builds
+
+Every commit on `main` is built for Windows and for Apple Silicon, and the
+newest pair is at [releases/latest](../../releases/latest). Those builds carry
+none of VocalWriter -- see below -- so they need a copy of the files put beside
+them; the tagged releases on the [releases page](../../releases) are the ones
+built with the files in place, which run as they stand.
+
 ## What you have to supply
 
 **This repository contains none of VocalWriter.** It is the work of KAE Labs,
