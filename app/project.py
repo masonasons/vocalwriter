@@ -12,6 +12,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from ppc.engine import DEFAULT_REVERB, clean_reverb  # noqa: E402
 from ppc.render import VOICE_DEFAULTS, clean_voice   # noqa: E402
 from ppc import phonology                                    # noqa: E402
 from tools.smf import MidiFile, split_phonemes               # noqa: E402
@@ -58,7 +59,7 @@ class Track(object):
 
     def __init__(self, name='', program=0, volume=100, pan=0,
                  mute=False, solo=False, notes=None, voice=None,
-                 consonants=None):
+                 consonants=None, reverb=None):
         self.name = name
         self.program = int(program)
         self.volume = int(volume)
@@ -71,6 +72,13 @@ class Track(object):
         #: what a part does unless it is given its own. See
         #: ppc.render.VOICE_CONTROLS.
         self.voice = None if voice is None else clean_voice(voice)
+        #: (room, wet) for this part, or None to follow the song's. A part
+        #: sung in a different space from the rest is a real thing to want --
+        #: a lead dry in front of a choir in a hall -- and parts that share a
+        #: setting share one reverberator and its tail.
+        self.reverb = None if reverb is None else clean_reverb(
+            reverb if isinstance(reverb, dict)
+            else {'room': reverb[0], 'wet': reverb[1]})
         #: consonant length for this part, or None to follow the project's.
         #: A part sung fast wants shorter consonants than one held slowly, and
         #: that is a property of the part rather than of the song.
@@ -140,7 +148,8 @@ def parse_sig(text, fallback=DEFAULT_SIG):
     return num, den
 
 
-def save(path, bpm, tracks, sig=DEFAULT_SIG, consonants=1.0, voice=None):
+def save(path, bpm, tracks, sig=DEFAULT_SIG, consonants=1.0, voice=None,
+         reverb=None, anticipate=True):
     """Write a project. `tracks` are Tracks whose notes have phonemes and a
     pitch, a length and a word. `voice` is the engine's voice controls for the
     song, which every track that has none of its own is sung with."""
@@ -155,6 +164,12 @@ def save(path, bpm, tracks, sig=DEFAULT_SIG, consonants=1.0, voice=None):
     song_voice = _voice_doc(voice)
     if song_voice:
         doc['voice'] = song_voice
+    if reverb and (reverb[0] or reverb[1]):
+        doc['reverb'] = {'room': int(reverb[0]), 'wet': int(reverb[1])}
+    if not anticipate:
+        # written only when it is off, so a file that says nothing about it
+        # sings on the beat -- which is what a file should do
+        doc['anticipate'] = False
     with open(path, 'w', encoding='utf-8') as fh:
         json.dump(doc, fh, indent=1)
         fh.write('\n')
@@ -180,6 +195,8 @@ def _track_doc(t):
     # the song does later.
     if getattr(t, 'voice', None) is not None:
         doc['voice'] = _voice_doc(t.voice)
+    if getattr(t, 'reverb', None) is not None:
+        doc['reverb'] = {'room': int(t.reverb[0]), 'wet': int(t.reverb[1])}
     if getattr(t, 'consonants', None) is not None:
         doc['consonants'] = float(t.consonants)
     return doc
@@ -196,7 +213,8 @@ def _note_doc(n):
 
 
 def load(path):
-    """Read a project: (bpm, tracks, time signature, consonants, voice).
+    """Read a project: bpm, tracks, signature, consonants, voice, reverb and
+    whether the consonants go before the beat.
 
     A track comes back as a dictionary whose `rows` are what the editor turns
     into notes, since the note itself belongs to the editor and not here.
@@ -225,7 +243,8 @@ def load(path):
     except (TypeError, ValueError):
         consonants = 1.0
     return (float(doc.get('bpm', 120)), tracks, sig, consonants,
-            clean_voice(doc.get('voice')))
+            clean_voice(doc.get('voice')), clean_reverb(doc.get('reverb')),
+            bool(doc.get('anticipate', True)))
 
 
 def _read_track(doc, index=0):
@@ -236,6 +255,8 @@ def _read_track(doc, index=0):
         con = None
     return {'name': doc.get('name') or ('Voice %d' % (index + 1)),
             'voice': (clean_voice(doc['voice']) if 'voice' in doc else None),
+            'reverb': (clean_reverb(doc['reverb']) if 'reverb' in doc
+                       else None),
             'consonants': con,
             'program': _int(doc.get('program'), 0),
             'volume': max(0, min(100, _int(doc.get('volume'), 100))),

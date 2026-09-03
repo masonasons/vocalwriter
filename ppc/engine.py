@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ppc import paths                                        # noqa: E402
 from ppc.lexicon import open_lexicon                         # noqa: E402
 from ppc.midi import syllable_lengths                        # noqa: E402
+from ppc.phonology import is_nucleus, targets                # noqa: E402
 from ppc.render import (SAMPLE_RATE, Note, Renderer,         # noqa: E402
                         write_wav)
 from ppc.render import engine_name, open_engine              # noqa: E402
@@ -207,6 +208,87 @@ def pan_gains(pan):
             math.sqrt(2.0) * math.sin(theta))
 
 
+#: VocalWriter's own defaults for a new song, from its reverb dialog.
+DEFAULT_REVERB = (40, 24)
+
+#: The most of a note that may be given to the note in front of it, so that a
+#: note opening with consonants can start early enough for its vowel to land
+#: on the beat. Half: take more than that and what is left is a grace note.
+ANTICIPATE_MOST = 0.5
+
+
+def onset_beats(note, bpm):
+    """How long a note's opening consonants last, in beats.
+
+    The phonemes before the first vowel: what stands between the note starting
+    and the note being heard. `Syllable_Duration` scales a syllable to fill its
+    note, and these durations already add up to the note, so their lengths are
+    what they will be.
+    """
+    t = targets()
+    ms = 0.0
+    for sym, dur in zip(note.phonemes, note.durations or []):
+        if is_nucleus(sym, t):
+            break
+        ms += dur
+    return ms * bpm / 60000.0
+
+
+def anticipate(notes, bpm, consonants, room):
+    """Move every note's consonants in front of its beat, in place.
+
+    A note is heard where its vowel is, not where it starts: "day" on beat two
+    with a 60 ms /d/ in front of it is heard 60 ms after beat two, and how late
+    depends on how the word is spelled -- nothing before a vowel, a little
+    before /d/, a lot before "str-". That is what makes a line with hard onsets
+    sound as though it is dragging, and it gets worse the longer the consonants
+    are allowed to be.
+
+    So a note that opens with consonants is started that much earlier and given
+    that much more time, and the time is taken from the note in front of it,
+    which is shortened by the same amount. Nothing moves: the vowels land where
+    the notes were, the phrase is the same length, and the consonants are sung
+    into the end of the note before -- which is what a singer does.
+
+    `room` is how much silence there is before the phrase, since the first note
+    has no note in front of it to borrow from. Returns how much earlier the
+    phrase now starts.
+    """
+    def retime(note, beats):
+        note.beats = beats
+        note.durations = syllable_lengths(note.phonemes,
+                                          beats * 60000.0 / bpm, consonants)
+
+    lead = max(0.0, min(onset_beats(notes[0], bpm), room))
+    if lead > 0:
+        retime(notes[0], notes[0].beats + lead)
+    for i in range(1, len(notes)):
+        give = min(onset_beats(notes[i], bpm),
+                   ANTICIPATE_MOST * notes[i - 1].beats)
+        if give <= 0:
+            continue
+        retime(notes[i - 1], notes[i - 1].beats - give)
+        retime(notes[i], notes[i].beats + give)
+    return lead
+
+
+def clean_reverb(values):
+    """(room, wet) as whole percentages, clamped. None is no reverb at all.
+
+    Two numbers, because they are the two the application has: the room scales
+    the four delay lines and the wet is how much of the result is heard, the
+    dry part being what is left.
+    """
+    if not values:
+        return (0, 0)
+    try:
+        room = int(round(float(values.get('room', DEFAULT_REVERB[0]))))
+        wet = int(round(float(values.get('wet', DEFAULT_REVERB[1]))))
+    except (AttributeError, TypeError, ValueError):
+        return (0, 0)
+    return (max(0, min(100, room)), max(0, min(100, wet)))
+
+
 def tracks_of(song):
     """A song's parts, whichever way it was written down.
 
@@ -373,41 +455,103 @@ class Engine(object):
         """Mix every track of a song, and say how loud the result came out.
 
         Returns (samples, peak). The samples are one column if every track sits
-        in the middle and two if any of them is panned, so a song that does not
-        use the stereo field is the same file it always was.
+        in the middle with no reverb on it, and two otherwise, so a song that
+        uses neither is the same file it always was.
+
+        Reverb is a property of the song that a part may take over, like the
+        consonant length. Parts are therefore grouped by the reverb they end up
+        with, each group mixed and reverberated on its own, and the groups
+        added together -- so two parts in the same room go through one
+        reverberator and share its tail, and a part in a room of its own is not
+        dragged into theirs.
         """
         bpm = float(song.get('bpm', 120))
         consonants = float(song.get('consonants', 1.0))
         start = float(song.get('start', 0.0))
+        early = song.get('anticipate', True)
         tracks = tracks_of(song)
         if not any(t.get('notes') for t in tracks):
             raise ValueError('nothing to sing')
-        parts = []
+        song_reverb = clean_reverb(song.get('reverb'))
+        groups = {}
         for t in tracks:
-            y = self._track(t, bpm, consonants, start)
+            y = self._track(t, bpm, consonants, start, early)
             vol = float(t.get('volume', 1.0))
             left, right = pan_gains(t.get('pan', 0.0))
-            parts.append((y, vol * left, vol * right))
+            own = t.get('reverb')
+            rev = song_reverb if own is None else clean_reverb(own)
+            groups.setdefault(rev, []).append((y, vol * left, vol * right))
+        parts = [p for group in groups.values() for p in group]
         n = max(len(y) for y, _l, _r in parts)
-        if any(abs(float(t.get('pan', 0.0))) > 1e-6 for t in tracks):
-            out = np.zeros((n, 2), dtype=np.float32)
-            for y, gl, gr in parts:
-                out[:len(y), 0] += y * gl
-                out[:len(y), 1] += y * gr
-        else:
-            out = np.zeros(n, dtype=np.float32)
-            for y, gl, _gr in parts:      # in the middle both gains are the
-                out[:len(y)] += y * gl    # volume, so one channel says it all
+        stereo = (any(abs(float(t.get('pan', 0.0))) > 1e-6 for t in tracks)
+                  or any(wet > 0 for _room, wet in groups))
+        if stereo:
+            mixes = []
+            for rev, group in groups.items():
+                mix = np.zeros((n, 2), dtype=np.float32)
+                for y, gl, gr in group:
+                    mix[:len(y), 0] += y * gl
+                    mix[:len(y), 1] += y * gr
+                mixes.append((rev, mix))
+            # Several voices at once can add up past full scale. Turning the
+            # mix down is a great deal better than clipping it -- and it has
+            # to happen before the reverb, which works on 16-bit samples and
+            # would clip whatever it was handed.
+            peak = float(np.abs(sum(m for _r, m in mixes)).max()) if n else 0.0
+            if peak > 1.0:
+                for _rev, mix in mixes:
+                    mix /= peak
+            done = [self._reverberate(mix, rev) for rev, mix in mixes]
+            # a reverb tail makes its group longer than the singing
+            out = np.zeros((max(len(d) for d in done), 2), dtype=np.float32)
+            for d in done:
+                out[:len(d)] += d
+            return out, peak
+        out = np.zeros(n, dtype=np.float32)
+        for y, gl, _gr in parts:          # in the middle both gains are the
+            out[:len(y)] += y * gl        # volume, so one channel says it all
         peak = float(np.abs(out).max()) if n else 0.0
         if peak > 1.0:
-            # Several voices at once can add up past full scale. Turning the
-            # mix down is a great deal better than clipping it, and the caller
-            # is told the number so that it can say so, rather than leaving
-            # someone wondering why the song got quieter.
+            # the caller is told the number, so that it can say so rather than
+            # leaving someone wondering why the song got quieter
             out /= peak
         return out, peak
 
-    def _track(self, track, bpm, consonants, start=0.0):
+    def _reverberate(self, mix, reverb):
+        """One group's mix through the engine's own reverb.
+
+        The reverberator works on the 16-bit samples the engine writes, 220
+        frames at a time, so the mix goes to 16 bits and back. That is what the
+        application does with its own sound buffers; going through floats
+        instead would be a different reverb.
+
+        The tail is what the last block leaves behind, so the mix is given a
+        second of room to decay into and the silence trimmed back off.
+        """
+        room, wet = reverb
+        if wet <= 0 or not len(mix):
+            return mix
+        eng = open_engine()
+        try:
+            if not eng.reverb(room / 100.0, wet / 100.0):
+                return mix
+            tail = np.zeros((SAMPLE_RATE, 2), dtype=np.float32)
+            padded = np.concatenate([mix, tail])
+            block = 220
+            frames = (len(padded) // block) * block
+            pcm = np.clip(padded[:frames], -1.0, 1.0)
+            pcm = (pcm * 32767).astype('<i2').reshape(-1)
+            eng.reverberate(pcm)
+            wet_mix = pcm.reshape(-1, 2).astype(np.float32) / 32767.0
+        finally:
+            eng.close()
+        # keep whatever of the tail is not silence, so a reverb longer than a
+        # second is not cut off, and a short one does not pad the file
+        loud = np.abs(wet_mix).max(axis=1) > (1.0 / 32767.0)
+        last = int(np.nonzero(loud)[0][-1]) + 1 if loud.any() else len(mix)
+        return wet_mix[:max(len(mix), min(last, len(wet_mix)))]
+
+    def _track(self, track, bpm, consonants, start=0.0, early=True):
         """One track's audio, phrase by phrase, laid out on the beat.
 
         Rests are not sung. Each run of notes between them goes to its own
@@ -440,6 +584,7 @@ class Engine(object):
         runs, total = phrases(track.get('notes') or [])
         length = max(0.0, total - start) * spb + TAIL_SECONDS
         out = np.zeros(int(round(length * SAMPLE_RATE)), dtype=np.float32)
+        was_over = 0.0                   # where the phrase before this ended
         for at, run in runs:
             notes = []
             for e in run:
@@ -449,9 +594,13 @@ class Engine(object):
                                   velocity=int(e.get('velocity', vel)),
                                   durations=syllable_lengths(
                                       ph, beats * 60000.0 / bpm, consonants)))
+            lead = (anticipate(notes, bpm, consonants, at - was_over)
+                    if early else 0.0)
+            was_over = at + sum(n.beats for n in notes) - lead
             # a marked rest to scale the last syllable against, and to let it
             # decay rather than being cut off
             notes.append(Note(notes[-1].midi, 0.4, ['%'], velocity=1))
+            at -= lead                   # the first note's consonants
             span = sum(n.beats for n in notes)
             if at + span <= start:
                 continue                 # over and done with before the cursor

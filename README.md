@@ -123,7 +123,8 @@ A song is made of **tracks**, each with its own voice, volume, pan and notes.
 | Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+A | copy, cut, paste, select all |
 | Ctrl+Up / Ctrl+Down | move a note earlier or later |
 | Ctrl+G | go to a bar |
-| Ctrl+, | song settings: tempo, time signature, consonants, voice controls |
+| Ctrl+, | song settings: tempo, signature, consonants, reverb, voice controls |
+| Ctrl+Shift+P | hear a note whenever it is nudged |
 | Space | play from the cursor, or stop |
 | Ctrl+P / Ctrl+H / Ctrl+M / Ctrl+. | play from the start / hear one note / metronome / stop |
 | Ctrl+O / Ctrl+S | open and save a project |
@@ -137,12 +138,30 @@ out are real, with formants and durations like any other, so they are here too.
 The fifty-seventh is silence, which is a rest rather than a phoneme.
 
 What belongs to the whole song -- the tempo, the time signature, how long the
-consonants are, and the engine's own voice controls -- is set once in the song
-settings and then left alone, which is why it is behind Ctrl+comma rather than
-in the window. A part follows the song's consonant length and voice controls
-until it is given its own in the track dialog, so setting the vibrato for a
-piece is one number in one place rather than the same number typed into every
-track.
+consonants are, the reverb, and the engine's own voice controls -- is set once
+in the song settings and then left alone, which is why it is behind Ctrl+comma
+rather than in the window. A part follows the song's consonant length, reverb
+and voice controls until it is given its own in the track dialog, so setting
+the vibrato for a piece is one number in one place rather than the same number
+typed into every track. Parts that share a reverb setting go through one
+reverberator and share its tail; a part with its own is in a room of its own,
+which is how a dry lead sits in front of a choir in a hall.
+
+**A note is heard where its vowel is, not where it starts.** "Straw" on beat
+three, with `str-` in front of the vowel, arrives 139 ms after beat three;
+"day" arrives 47 ms after; a word beginning with a vowel arrives on time. That
+is what makes a line with hard onsets drag, unevenly, in a way that gets worse
+the longer the consonants are allowed to be -- and it is why *Consonants before
+the beat*, in the song settings, is on. It gives a note that opens with
+consonants that much more time and takes it from the note in front, so the
+consonants are sung into the end of the previous note and the vowel lands where
+the note is written. Measured on the same three words: 47 ms and 139 ms late
+become 7 ms and 5 ms.
+
+How you like to work, as opposed to what the song is, lives on the **Settings**
+menu and is kept between songs -- at the moment that is one thing, *Preview
+notes as they change* (Ctrl+Shift+P), which plays a note whenever its pitch or
+length is nudged, once the nudging stops.
 
 The voice controls are the engine's: colour, vibrato depth and rate, chorus,
 breath, detune and portamento -- the glide between notes. Which of them do

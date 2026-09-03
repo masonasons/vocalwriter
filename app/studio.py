@@ -29,6 +29,7 @@ import wx.adv
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.lists import ReportList                             # noqa: E402
+from app import settings                                     # noqa: E402
 from app import project                                      # noqa: E402
 from app.engine import Engine                                # noqa: E402
 from app.player import PLAYING, Player                        # noqa: E402
@@ -50,6 +51,7 @@ ID_ADD_WORD, ID_ADD_NOTE, ID_EDIT, ID_REMOVE = (wx.NewIdRef() for _ in range(4))
 ID_UP, ID_DOWN, ID_LONGER, ID_SHORTER = (wx.NewIdRef() for _ in range(4))
 ID_PLAY, ID_HEAR, ID_STOP, ID_KEYS = (wx.NewIdRef() for _ in range(4))
 ID_ADD_REST, ID_IMPORT, ID_EXPORT = (wx.NewIdRef() for _ in range(3))
+ID_AUTO_PREVIEW = wx.NewIdRef()
 ID_EXPORT_TRACKS = wx.NewIdRef()
 ID_BAR_REST, ID_GOTO_BAR, ID_METRONOME = (wx.NewIdRef() for _ in range(3))
 ID_PLAY_PAUSE, ID_PLAY_HERE, ID_PANES = (wx.NewIdRef() for _ in range(3))
@@ -130,6 +132,11 @@ def file_name(text, fallback='track'):
                   for c in text)
     return ' '.join(out.split()).strip(' .-') or fallback
 
+
+#: How long the nudging has to stop for before a note is previewed. Long
+#: enough that holding an arrow key does not queue up a render per step, short
+#: enough that letting go is followed by the sound rather than a wait.
+PREVIEW_WAIT = 180
 
 #: MSAA: a focus event, and the list's items are its client children.
 EVENT_OBJECT_FOCUS = 0x8005
@@ -881,7 +888,8 @@ class SongSettingsDialog(wx.Dialog):
     into every track.
     """
 
-    def __init__(self, parent, bpm, sig, consonant_pct, voice):
+    def __init__(self, parent, bpm, sig, consonant_pct, voice, reverb,
+                 anticipate=True):
         wx.Dialog.__init__(self, parent, title='Song settings')
         outer = wx.BoxSizer(wx.VERTICAL)
         self.tempo = wx.SpinCtrl(self, min=30, max=250, initial=int(bpm),
@@ -901,6 +909,31 @@ class SongSettingsDialog(wx.Dialog):
         labelled(self, outer, 'Consonant length', self.consonants,
                  hint='100 is natural, 40 clips them hard against the vowels')
 
+        # A note is heard where its vowel is, not where it starts, so a note
+        # that opens with consonants sounds late -- and how late depends on
+        # how the word is spelled, which is what makes a line drag unevenly.
+        self.anticipate = wx.CheckBox(
+            self, label='Consonants &before the beat')
+        self.anticipate.SetValue(bool(anticipate))
+        self.anticipate.SetToolTip(
+            'The vowel lands on the beat and the consonants are sung into the '
+            'end of the note before it, the way a singer does. Turn this off '
+            'to hear a note start exactly where it is written, consonants '
+            'and all.')
+        outer.Add(self.anticipate, 0, wx.ALL, 6)
+
+        # The engine's own reverb, which is two numbers in the application as
+        # well. Nothing is heard until the wet is turned up, so a song that
+        # says nothing about it sounds as it did before there was one.
+        self.room = wx.SpinCtrl(self, min=0, max=100, initial=int(reverb[0]),
+                                size=(80, -1))
+        labelled(self, outer, 'Reverb room', self.room,
+                 hint='how big the space is; VocalWriter used 40')
+        self.wet = wx.SpinCtrl(self, min=0, max=100, initial=int(reverb[1]),
+                               size=(80, -1))
+        labelled(self, outer, 'Reverb amount', self.wet,
+                 hint='per cent heard; 0 is none at all, VocalWriter used 24')
+
         # the engine's own voice controls, for every part that has not been
         # given its own
         self.voice_ctrls = {}
@@ -918,13 +951,15 @@ class SongSettingsDialog(wx.Dialog):
         self.tempo.SetFocus()
 
     def result(self):
-        """(tempo, time signature, consonant length, voice controls)."""
+        """(tempo, signature, consonants, voice, reverb, on the beat)."""
         return (self.tempo.GetValue(),
                 project.parse_sig(self.sig.GetValue(), self.was_sig),
                 self.consonants.GetValue(),
                 render.clean_voice(
                     dict((k, c.GetValue())
-                         for k, c in self.voice_ctrls.items())))
+                         for k, c in self.voice_ctrls.items())),
+                (self.room.GetValue(), self.wet.GetValue()),
+                self.anticipate.GetValue())
 
 
 class TrackDialog(wx.Dialog):
@@ -972,6 +1007,27 @@ class TrackDialog(wx.Dialog):
             wx.EVT_CHECKBOX,
             lambda e: self.consonants.Enable(self.own_consonants.GetValue()))
 
+        # A part may be sung in a different space from the rest -- a lead
+        # dry in front of a choir in a hall. Parts that share a setting share
+        # one reverberator, so they share its tail as well.
+        own_reverb = getattr(track, 'reverb', None)
+        self.own_reverb = wx.CheckBox(
+            self, label='&Reverb just for this track')
+        self.own_reverb.SetValue(own_reverb is not None)
+        outer.Add(self.own_reverb, 0, wx.ALL, 6)
+        shown = own_reverb if own_reverb is not None else studio.song_reverb
+        self.room = wx.SpinCtrl(self, min=0, max=100, initial=int(shown[0]),
+                                size=(80, -1))
+        labelled(self, outer, 'Reverb room', self.room,
+                 hint='when the box above is ticked')
+        self.wet = wx.SpinCtrl(self, min=0, max=100, initial=int(shown[1]),
+                               size=(80, -1))
+        labelled(self, outer, 'Reverb amount', self.wet,
+                 hint='per cent heard, when the box above is ticked')
+        for spin in (self.room, self.wet):
+            spin.Enable(own_reverb is not None)
+        self.own_reverb.Bind(wx.EVT_CHECKBOX, self.on_own_reverb)
+
         # The engine's own voice controls. Like the consonant length, a
         # part follows the song's until it is given its own: the values shown
         # while the box is unticked are the song's, so ticking it starts from
@@ -1010,6 +1066,10 @@ class TrackDialog(wx.Dialog):
         for spin in self.voice_ctrls.values():
             spin.Enable(self.own_voice.GetValue())
 
+    def on_own_reverb(self, _evt):
+        for spin in (self.room, self.wet):
+            spin.Enable(self.own_reverb.GetValue())
+
     def apply_voice(self, track):
         """Put the voice settings and the consonant length onto the track.
 
@@ -1022,6 +1082,8 @@ class TrackDialog(wx.Dialog):
             if self.own_voice.GetValue() else None)
         track.consonants = (self.consonants.GetValue() / 100.0
                             if self.own_consonants.GetValue() else None)
+        track.reverb = ((self.room.GetValue(), self.wet.GetValue())
+                        if self.own_reverb.GetValue() else None)
 
 
 class Frame(wx.Frame):
@@ -1040,6 +1102,13 @@ class Frame(wx.Frame):
         self.sig = project.DEFAULT_SIG
         self.consonant_pct = 100
         self.song_voice = render.clean_voice(None)
+        #: (room, wet) for the song, as whole percentages. Nothing at all
+        #: until it is asked for: a song that says nothing about the reverb
+        #: sounds exactly as it did before there was one.
+        self.song_reverb = (0, 0)
+        #: whether a note's consonants are sung before its beat, so that the
+        #: vowel -- which is where a note is heard -- lands on it
+        self.anticipate = True
         self.current = 0
         self._switching = False
         self.programs = [0]
@@ -1052,6 +1121,11 @@ class Frame(wx.Frame):
         self.rendering = False
         self.path = None            # the project file, once it has one
         self.dirty = False
+
+        #: how you like to work, kept between songs and between sittings
+        self.settings = settings.load()
+        #: the timer that waits for the nudging to stop before previewing
+        self._preview_timer = None
 
         self.engine = Engine(on_error=self._engine_error)
         self._build()
@@ -1221,7 +1295,7 @@ class Frame(wx.Frame):
         # wx moves this into the application menu on macOS, where it becomes
         # Command+comma; elsewhere it stays here as Control+comma.
         f.Append(wx.ID_PREFERENCES, '&Song settings...\tCtrl+,',
-                 'Tempo, time signature, consonant length and voice controls')
+                 'Tempo, time signature, consonants, reverb, voice controls')
         f.AppendSeparator()
         f.Append(wx.ID_EXIT, 'E&xit	Alt+F4')
 
@@ -1233,6 +1307,12 @@ class Frame(wx.Frame):
         bar.Append(note, '&Note')
         bar.Append(play, '&Play')
         bar.Append(go, '&Go')
+        prefs = wx.Menu()
+        self.mi_auto_preview = prefs.AppendCheckItem(
+            ID_AUTO_PREVIEW, '&Preview notes as they change\tCtrl+Shift+P',
+            'Hear a note whenever its pitch or length is nudged')
+        self.mi_auto_preview.Check(bool(self.settings.get('auto_preview')))
+        bar.Append(prefs, '&Settings')
         bar.Append(help_, '&Help')
         self.SetMenuBar(bar)
 
@@ -1275,18 +1355,21 @@ class Frame(wx.Frame):
                                (ID_EXPORT, self.on_export),
                                (ID_EXPORT_TRACKS, self.on_export_tracks),
                                (wx.ID_PREFERENCES, self.on_song_settings),
+                               (ID_AUTO_PREVIEW, self.on_auto_preview),
                                (wx.ID_EXIT, lambda e: self.Close())):
             self.Bind(wx.EVT_MENU, handler, id=ident)
 
     def on_song_settings(self, _evt):
         dlg = SongSettingsDialog(self, self.bpm, self.signature(),
-                                 self.consonant_pct, self.song_voice)
+                                 self.consonant_pct, self.song_voice,
+                                 self.song_reverb, self.anticipate)
         if dlg.ShowModal() == wx.ID_OK:
-            was = (self.bpm, self.sig, self.consonant_pct, self.song_voice)
-            (self.bpm, self.sig, self.consonant_pct,
-             self.song_voice) = dlg.result()
-            if (self.bpm, self.sig, self.consonant_pct,
-                    self.song_voice) != was:
+            was = (self.bpm, self.sig, self.consonant_pct, self.song_voice,
+                   self.song_reverb, self.anticipate)
+            (self.bpm, self.sig, self.consonant_pct, self.song_voice,
+             self.song_reverb, self.anticipate) = dlg.result()
+            if (self.bpm, self.sig, self.consonant_pct, self.song_voice,
+                    self.song_reverb, self.anticipate) != was:
                 self.touch()
             if self.sig != was[1]:
                 # which bar a note falls in is read off the signature, so the
@@ -1299,7 +1382,54 @@ class Frame(wx.Frame):
             if self.song_voice != was[3]:
                 self.say('voice controls set for every part that has not been '
                          'given its own')
+            if self.song_reverb != was[4]:
+                self.say('reverb %s'
+                         % ('off' if not self.song_reverb[1]
+                            else 'room %d, %d%% heard'
+                            % self.song_reverb))
+            if self.anticipate != was[5]:
+                self.say('consonants %s the beat'
+                         % ('before' if self.anticipate else 'after'))
         dlg.Destroy()
+
+    def on_auto_preview(self, _evt):
+        """A setting of the program, not of the song: it is how you like to
+        work, so it follows you from song to song and is saved at once rather
+        than waiting for a dialog to be closed."""
+        on = self.mi_auto_preview.IsChecked()
+        self.settings['auto_preview'] = on
+        kept = settings.save(self.settings)
+        self.say('previewing notes as they change is %s%s'
+                 % ('on' if on else 'off',
+                    '' if kept else ', for this sitting only: the settings '
+                    'file could not be written'))
+
+    def preview_note(self, i):
+        """Hear one note, once the nudging has stopped.
+
+        A held arrow key sends a stream of changes and rendering every one of
+        them would queue up a stream of little sounds, each already out of
+        date. The last one is the one worth hearing, so the render waits for
+        a moment of quiet first.
+        """
+        if not self.settings.get('auto_preview') or self.rendering:
+            return
+        if self._preview_timer is not None:
+            self._preview_timer.Stop()
+        self._preview_timer = wx.CallLater(PREVIEW_WAIT,
+                                           self._preview_now, i)
+
+    def _preview_now(self, i):
+        self._preview_timer = None
+        if not (0 <= i < len(self.notes)) or self.rendering:
+            return
+        note = self.notes[i]
+        if not note.phonemes:             # a rest has nothing to hear
+            return
+        self.stop_audio()
+        self.rendering = True
+        self.engine.render(self.song([note]), self.preview_wav,
+                           lambda res: wx.CallAfter(self._heard, res))
 
     def on_keys(self, _evt):
         for line in ('F6  move between the tracks list and the notes list',
@@ -1318,8 +1448,9 @@ class Frame(wx.Frame):
                      'Ctrl+A  select every note',
                      'Ctrl+Up or Ctrl+Down  move a note earlier or later',
                      'Ctrl+comma  song settings: tempo, time signature, '
-                     'consonant length, and the voice controls every part '
-                     'follows unless it has its own',
+                     'consonant length, the reverb, and the voice controls '
+                     'every part follows unless it has its own',
+                     'Ctrl+Shift+P  hear a note whenever it is nudged',
                      'Shift with the arrow keys selects more than one note',
                      'Alt+Up or Alt+Down  transpose a semitone',
                      'Alt+Right or Alt+Left  a sixteenth note longer or '
@@ -1733,6 +1864,7 @@ class Frame(wx.Frame):
             self.say('%d notes %s a semitone'
                      % (len(rows), 'up' if by > 0 else 'down'))
         reannounce(self.list, rows[0])
+        self.preview_note(rows[0])
 
     def nudge_length(self, up):
         """Move the selected note a sixteenth note longer or shorter.
@@ -1762,6 +1894,7 @@ class Frame(wx.Frame):
             return
         self.touch()
         self.sync_lengths()
+        self.preview_note(rows[0])
         if len(rows) == 1:
             self.say(beat_count(self.notes[rows[0]].beats))
         else:
@@ -1987,6 +2120,9 @@ class Frame(wx.Frame):
         return {'bpm': float(self.bpm),
                 'consonants': self.consonant_pct / 100.0,
                 'start': round(float(start), 6),
+                'reverb': {'room': self.song_reverb[0],
+                           'wet': self.song_reverb[1]},
+                'anticipate': bool(self.anticipate),
                 'tracks': [self.part(t) for t in parts]}
 
     def part(self, t):
@@ -1999,10 +2135,13 @@ class Frame(wx.Frame):
         voice = getattr(t, 'voice', None)
         if voice is None:
             voice = self.song_voice
+        own_reverb = getattr(t, 'reverb', None)
         return {'program': t.program,
                 'volume': t.volume / 100.0,
                 'pan': t.pan / 100.0,
                 'voice': dict(voice or {}),
+                'reverb': (None if own_reverb is None
+                           else {'room': own_reverb[0], 'wet': own_reverb[1]}),
                 'consonants': getattr(t, 'consonants', None),
                 'notes': [{'pitch': n.pitch, 'beats': n.beats,
                            'phonemes': n.phonemes or [REST]} for n in t.notes],
@@ -2275,7 +2414,7 @@ class Frame(wx.Frame):
         return answer == wx.YES
 
     def take(self, bpm, tracks, path=None, sig=None, consonants=None,
-             voice=None):
+             voice=None, reverb=None, anticipate=True):
         """Replace the song with what was loaded or imported.
 
         `tracks` are the dictionaries `project.load` gives back, whose rows
@@ -2286,6 +2425,7 @@ class Frame(wx.Frame):
             name=t['name'], program=t['program'], volume=t['volume'],
             pan=t['pan'], mute=t['mute'], solo=t['solo'],
             voice=t.get('voice'), consonants=t.get('consonants'),
+            reverb=t.get('reverb'),
             notes=[Note(ph, pitch, beats, word, bend)
                    for ph, pitch, beats, word, bend in t['rows']])
             for t in tracks]
@@ -2297,6 +2437,8 @@ class Frame(wx.Frame):
         if consonants:
             self.consonant_pct = max(10, min(100, int(round(consonants * 100))))
         self.song_voice = render.clean_voice(voice)
+        self.song_reverb = tuple(reverb or (0, 0))
+        self.anticipate = bool(anticipate)
         self.path = path
         self.sync_tracks(select=0)
         self.sync(select=0)
@@ -2322,11 +2464,12 @@ class Frame(wx.Frame):
                 return
             path = dlg.GetPath()
         try:
-            bpm, tracks, sig, consonants, voice = project.load(path)
+            (bpm, tracks, sig, consonants, voice, reverb,
+             early) = project.load(path)
         except (OSError, ValueError) as exc:
             self.say('cannot open %s: %s' % (os.path.basename(path), exc))
             return
-        self.take(bpm, tracks, path, sig, consonants, voice)
+        self.take(bpm, tracks, path, sig, consonants, voice, reverb, early)
         self.say('opened %s: %d track%s, %d notes, %g bpm'
                  % (os.path.basename(path), len(self.tracks),
                     '' if len(self.tracks) == 1 else 's',
@@ -2352,7 +2495,7 @@ class Frame(wx.Frame):
         try:
             project.save(path, self.bpm, self.tracks,
                          self.signature(), self.consonant_pct / 100.0,
-                         self.song_voice)
+                         self.song_voice, self.song_reverb, self.anticipate)
         except OSError as exc:
             self.say('could not save: %s' % exc)
             return

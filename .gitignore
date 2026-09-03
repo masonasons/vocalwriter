@@ -51,7 +51,8 @@ lib/
 *.pyd
 *.so
 *.dylib
-ppc/_ppccore.c          # cffi writes this beside the core
+# cffi writes this one beside the core it builds
+ppc/_ppccore.c
 __pycache__/
 *.py[cod]
 

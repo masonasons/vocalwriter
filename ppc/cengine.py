@@ -68,6 +68,9 @@ const char *vw_ed_voice_name(vw_editor *e);
 int vw_ed_lexicon(vw_editor *e, const unsigned char *data, size_t len);
 int vw_ed_word(vw_editor *e, const char *text, unsigned char *out);
 const char *vw_ed_phoneme_name(int code);
+
+int vw_ed_reverb(vw_editor *e, float room, float wet);
+int vw_ed_reverberate(vw_editor *e, int16_t *samples, int32_t frames);
 """
 
 _ffi = None
@@ -262,6 +265,30 @@ class Editor(object):
         if name == _ffi.NULL:
             return ''
         return _ffi.string(name).decode('mac_roman', 'replace')
+
+    # -- the reverb --------------------------------------------------------
+
+    def reverb(self, room, wet):
+        """The application's own two numbers: the room, which scales the delay
+        lines, and how much of the result is heard. Both 0 to 1. True if it is
+        on afterwards."""
+        rc = self._lib.vw_ed_reverb(self._e, float(room), float(wet))
+        if rc < 0:
+            raise RuntimeError('the reverb could not get its memory')
+        return rc == 0
+
+    def reverberate(self, samples):
+        """Reverberate interleaved stereo int16 in place, 220 frames at a
+        time. Returns how many frames were processed; a tail that does not
+        fill a block is left alone."""
+        frames = len(samples) // 2
+        whole = (frames // 220) * 220
+        if whole < 220:
+            return 0
+        buf = _ffi.from_buffer('int16_t[]', samples)
+        if self._lib.vw_ed_reverberate(self._e, buf, whole) != 0:
+            return 0
+        return whole
 
     # -- words -------------------------------------------------------------
 
