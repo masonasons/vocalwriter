@@ -52,7 +52,23 @@ ASSETS = ('assets/EnglishLex', 'assets/GMSpeech.rsrc',
           APP + '/MacOS/VocalWriter', APP + '/Resources/VocalWriter.rsrc')
 
 import zipfile
-data = [('emu/phoneme_palette.json', 'emu')]
+# Which commit this build is, so that a bug report can name one. From a
+# checkout that is git; a source tarball leaves it out and the program says
+# so rather than guessing.
+import subprocess
+stamp = os.path.join('build', 'build.txt')
+os.makedirs('build', exist_ok=True)
+try:
+    said = subprocess.run(['git', 'log', '-1', '--format=%h %cd',
+                           '--date=format:%Y-%m-%d'],
+                          capture_output=True, text=True, timeout=10)
+    text = said.stdout.strip() if said.returncode == 0 else ''
+except Exception:
+    text = ''
+with open(stamp, 'w', encoding='utf-8') as fh:
+    fh.write(text + chr(10))
+
+data = [('emu/phoneme_palette.json', 'emu'), (stamp, '.')]
 absent = [rel for rel in ASSETS if not os.path.isfile(rel)]
 if absent:
     # A build without them is a real thing to want: it is what continuous

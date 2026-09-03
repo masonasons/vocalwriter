@@ -29,7 +29,9 @@ import wx.adv
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.lists import ReportList                             # noqa: E402
+from app import recovery                                     # noqa: E402
 from app import settings                                     # noqa: E402
+from app import version                                      # noqa: E402
 from app import project                                      # noqa: E402
 from app.engine import Engine                                # noqa: E402
 from app.player import PLAYING, Player                        # noqa: E402
@@ -132,6 +134,9 @@ def file_name(text, fallback='track'):
                   for c in text)
     return ' '.join(out.split()).strip(' .-') or fallback
 
+
+#: How long the song has to stop changing for before a copy is kept.
+RECOVERY_WAIT = 2500
 
 #: How long the nudging has to stop for before a note is previewed. Long
 #: enough that holding an arrow key does not queue up a render per step, short
@@ -1129,6 +1134,8 @@ class Frame(wx.Frame):
         self.settings = settings.load()
         #: the timer that waits for the nudging to stop before previewing
         self._preview_timer = None
+        #: and the one that waits before keeping a copy of the song
+        self._recovery_timer = None
 
         self.engine = Engine(on_error=self._engine_error)
         self._build()
@@ -1144,6 +1151,8 @@ class Frame(wx.Frame):
                          lambda r: wx.CallAfter(self._set_program_map, r),
                          programs=list(range(128)))
         self.Bind(wx.EVT_CLOSE, self.on_close)
+        # after the window is up, so the question has something to sit on
+        wx.CallLater(400, self.offer_recovery)
 
     #: The notes of whichever track is selected. Everything that edits notes
     #: goes through this, so adding, nudging, copying and the rest all act on
@@ -1484,6 +1493,7 @@ class Frame(wx.Frame):
         self.say('engine ready: %s, Python %s, %s voices'
                  % (info.get('engine', 'unknown'), info.get('python', ''),
                     info.get('voices', '?')))
+        self.say('this is build %s' % version.describe())
         if info.get('bank') is False:
             # Without GMBank the voices built on its wavetables cannot be
             # selected at all -- the engine reads a null pointer where the
@@ -2436,6 +2446,58 @@ class Frame(wx.Frame):
         name = os.path.basename(self.path) if self.path else 'Untitled'
         self.SetTitle('%s%s - VocalWriter Studio'
                       % ('*' if dirty else '', name))
+        self.keep_a_copy()
+
+    def keep_a_copy(self):
+        """Write the song somewhere it will survive this process.
+
+        The synthesiser is in this process, which is what makes it fast and
+        what means a fault in it ends the program rather than one process of
+        it. So the song is written out a couple of seconds after it stops
+        changing -- soon enough to lose nothing worth having, late enough not
+        to write a file on every keystroke.
+        """
+        if self._recovery_timer is not None:
+            self._recovery_timer.Stop()
+        self._recovery_timer = wx.CallLater(RECOVERY_WAIT, self._write_copy)
+
+    def _write_copy(self):
+        self._recovery_timer = None
+        if not any(t.notes for t in self.tracks):
+            return
+        recovery.write(self.bpm, self.tracks, self.signature(),
+                       self.consonant_pct / 100.0, self.song_voice,
+                       self.song_reverb, self.anticipate, self.path)
+
+    def offer_recovery(self):
+        """A song left behind by a run that did not close: offer it back."""
+        left = recovery.waiting()
+        if not left:
+            return
+        path, mark = left
+        was = mark.get('path')
+        answer = wx.MessageBox(
+            'VocalWriter Studio did not close properly last time, and the '
+            'song you were working on was kept.' + chr(10) + chr(10) +
+            '%d notes%s.' % (mark.get('notes', 0),
+                             ', from %s' % os.path.basename(was) if was
+                             else '') + chr(10) + chr(10) +
+            'Open it?', 'Recover the song', wx.YES_NO | wx.ICON_QUESTION, self)
+        if answer != wx.YES:
+            recovery.clear()
+            return
+        try:
+            (bpm, tracks, sig, consonants, voice, reverb,
+             early) = project.load(path)
+        except (OSError, ValueError) as exc:
+            self.say('the kept song could not be read: %s' % exc)
+            recovery.clear()
+            return
+        self.take(bpm, tracks, was, sig, consonants, voice, reverb, early)
+        self.touch(dirty=True)
+        self.say('recovered %d notes%s. Save it somewhere before going on.'
+                 % (sum(len(t.notes) for t in self.tracks),
+                    ' from %s' % os.path.basename(was) if was else ''))
 
     def may_discard(self, what):
         """Ask before throwing away unsaved work. True to go ahead."""
@@ -2651,6 +2713,8 @@ class Frame(wx.Frame):
             return
         self.stop_audio()
         self.engine.close()
+        # closing properly is what says the kept copy is not needed
+        recovery.clear()
         evt.Skip()
 
 
