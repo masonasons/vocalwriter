@@ -70,6 +70,17 @@ class WindowsAnnouncements(unittest.TestCase):
 @unittest.skipUnless(sys.platform == 'win32', 'Requires native Windows UI Automation')
 class NativeWindowsAnnouncement(unittest.TestCase):
     def test_notification_from_real_note_list(self):
+        """The real thing, on a real list, where there is a desktop for it.
+
+        UI Automation needs an interactive desktop: a build agent has none, so
+        there is no accessible object to wrap and no provider to make from it,
+        and the test skips rather than failing the build for it. Production
+        code is unaffected either way -- announce() returning False is the
+        signal to use the MSAA fallback, which is what happens there.
+
+        Anything past that point is a real fault and still fails, naming the
+        call and its HRESULT instead of only "False is not true".
+        """
         import wx
         from app.lists import ReportList
         app = wx.App.Get() or wx.App(False)
@@ -80,8 +91,13 @@ class NativeWindowsAnnouncement(unittest.TestCase):
             notes.InsertItem(0, 'C4')
             frame.Show()
             app.Yield()
-            self.assertTrue(windows.announce(notes, 'C4'))
-            self.assertTrue(windows.announce(notes, 'one bar one beat'))
+            for text in ('C4', 'one bar one beat'):
+                if windows.announce(notes, text):
+                    continue
+                reason = windows.LAST_REASON
+                if reason.startswith(windows.UNAVAILABLE):
+                    self.skipTest('no UI Automation in this session: %s' % reason)
+                self.fail('announce(%r) failed -- %s' % (text, reason or 'no reason'))
         finally:
             frame.Destroy()
             app.Yield()
