@@ -29,6 +29,7 @@ import wx.adv
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.lists import ReportList                             # noqa: E402
+from app.accessibility import announce                       # noqa: E402
 from app import recovery                                     # noqa: E402
 from app import settings                                     # noqa: E402
 from app import version                                      # noqa: E402
@@ -204,6 +205,25 @@ def length_text(beats):
     """A length for the Beats column: the number, and its name if it has one."""
     name = note_value(beats)
     return '%g, %s note' % (beats, name) if name else '%g' % beats
+
+
+def spoken_length(beats, sig):
+    """Note names below a bar; bars and metrical beats for longer notes."""
+    span = project.bar_beats(sig)
+    bars = int((beats + 1e-6) // span)
+    remaining = round((beats - bars * span) * sig[1] / 4.0, 6)
+
+    def count(value, unit):
+        return '%s %s%s' % ('one' if value == 1 else '%g' % value,
+                            unit, '' if value == 1 else 's')
+
+    if bars:
+        result = count(bars, 'bar')
+        if remaining > 1e-6:
+            result += ' ' + count(remaining, 'beat')
+        return result
+    name = note_value(beats)
+    return name + ' note' if name else count(remaining, 'beat')
 
 
 def pitch_name(midi):
@@ -592,17 +612,19 @@ class AddWordDialog(wx.Dialog):
             if code in (wx.WXK_UP, wx.WXK_DOWN):
                 step = SEMITONE if code == wx.WXK_UP else -SEMITONE
                 n.pitch = max(0, min(127, n.pitch + step))
-                self.studio.say(pitch_name(n.pitch))
+                message = pitch_name(n.pitch)
             else:
                 want = stepped_length(n.beats, code == wx.WXK_RIGHT)
                 if want is None:
-                    self.studio.say('%s, the shortest a nudge will make it'
-                                    % beat_count(n.beats))
+                    self.studio.announce_note(
+                        '%s, the shortest a nudge will make it'
+                        % spoken_length(n.beats, self.studio.signature()),
+                        self.list, i)
                     return
                 n.beats = want
-                self.studio.say(beat_count(n.beats))
+                message = spoken_length(n.beats, self.studio.signature())
             self.refresh_row(i)
-            reannounce(self.list, i)
+            self.studio.announce_note(message, self.list, i)
         elif code in (wx.WXK_RETURN, wx.WXK_NUMPAD_ENTER) and i >= 0:
             self.on_edit(None)
         else:
@@ -1488,6 +1510,16 @@ class Frame(wx.Frame):
         self.status.SetStatusText(text)
         self.messages.AppendText(text + '\n')
 
+    def announce_note(self, text, control, row):
+        """Speak a shortcut's result after updating its row, keeping focus."""
+        self.say(text)
+        try:
+            if announce(control, text):
+                return
+        except Exception as error:
+            wx.LogWarning('Screen reader announcement failed: %s' % error)
+        reannounce(control, row)
+
     def _ready(self, info):
         info = info or {}
         self.say('engine ready: %s, Python %s, %s voices'
@@ -1897,23 +1929,15 @@ class Frame(wx.Frame):
             self.refresh_row(i)
         self.touch()
         if len(rows) == 1:
-            self.say(pitch_name(self.notes[rows[0]].pitch))
+            message = pitch_name(self.notes[rows[0]].pitch)
         else:
-            self.say('%d notes %s a semitone'
-                     % (len(rows), 'up' if by > 0 else 'down'))
-        reannounce(self.list, rows[0])
+            message = '%d notes %s a semitone' % (
+                len(rows), 'up' if by > 0 else 'down')
+        self.announce_note(message, self.list, rows[0])
         self.preview_note(rows[0])
 
     def nudge_length(self, up):
-        """Move the selected note a sixteenth note longer or shorter.
-
-        It lands *on* the grid rather than adding a step to whatever was
-        there, so the lengths stay musical. Adding a step is what made this
-        feel unreliable: a half-beat note pushed down hit the floor at 0.25 --
-        a quarter of a beat, not a half -- and pushing it back up from there
-        gave 0.75, so the note never returned to where it started and the two
-        keys did not undo each other.
-        """
+        """Move the selected note a sixteenth note longer or shorter."""
         rows = self.selected()
         if not rows:
             self.say('select a note first')
@@ -1927,18 +1951,21 @@ class Frame(wx.Frame):
             n.beats = want
             moved += 1
         if not moved:
-            self.say('%s, the shortest a nudge will make it. Edit the note to '
-                     'go shorter.' % beat_count(self.notes[rows[0]].beats))
+            self.announce_note(
+                '%s, the shortest a nudge will make it. Edit the note to '
+                'go shorter.' % spoken_length(self.notes[rows[0]].beats,
+                                              self.signature()),
+                self.list, rows[0])
             return
         self.touch()
         self.sync_lengths()
         self.preview_note(rows[0])
         if len(rows) == 1:
-            self.say(beat_count(self.notes[rows[0]].beats))
+            message = spoken_length(self.notes[rows[0]].beats, self.signature())
         else:
-            self.say('%d notes a sixteenth %s'
-                     % (moved, 'longer' if up else 'shorter'))
-        reannounce(self.list, rows[0])
+            message = '%d notes a sixteenth %s' % (
+                moved, 'longer' if up else 'shorter')
+        self.announce_note(message, self.list, rows[0])
 
     def sync_lengths(self):
         """Redraw every row: a length change moves the bars after it."""
