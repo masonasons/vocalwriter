@@ -19,6 +19,7 @@ built to avoid it: previewing one note renders only that note, and repeating a
 render that has already been done returns the cached audio at once.
 """
 import math
+from copy import deepcopy
 import os
 import sys
 import tempfile
@@ -28,6 +29,7 @@ import wx.adv
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from app.history import History, undoable
 from app.lists import ReportList                             # noqa: E402
 from app.accessibility import announce                       # noqa: E402
 from app import recovery                                     # noqa: E402
@@ -1161,6 +1163,7 @@ class Frame(wx.Frame):
 
         self.engine = Engine(on_error=self._engine_error)
         self._build()
+        self._history = History(self._snapshot()['document'])
         self._build_menu()
         # The engine answers in order, so ask for the cheap things first:
         # reading the palette is a file read, listing the voices runs sixteen
@@ -1344,7 +1347,15 @@ class Frame(wx.Frame):
         help_ = wx.Menu()
         help_.Append(ID_KEYS, '&Keys	F1', 'List the shortcuts in Messages')
 
+        edit = wx.Menu()
+        edit.Append(wx.ID_UNDO, '&Undo\tCtrl+Z', 'Undo the last song edit')
+        edit.Append(wx.ID_REDO, '&Redo\tCtrl+Shift+Z', 'Redo the last undone edit')
+        self.Bind(wx.EVT_MENU, self.on_undo, id=wx.ID_UNDO)
+        self.Bind(wx.EVT_MENU, self.on_redo, id=wx.ID_REDO)
+        self.Bind(wx.EVT_UPDATE_UI, self._update_history, id=wx.ID_UNDO)
+        self.Bind(wx.EVT_UPDATE_UI, self._update_history, id=wx.ID_REDO)
         bar.Append(f, '&File')
+        bar.Append(edit, '&Edit')
         bar.Append(track, '&Track')
         bar.Append(note, '&Note')
         bar.Append(play, '&Play')
@@ -1419,6 +1430,7 @@ class Frame(wx.Frame):
             return
         evt.Skip()
 
+    @undoable('song settings')
     def on_song_settings(self, _evt):
         dlg = SongSettingsDialog(self, self.bpm, self.signature(),
                                  self.consonant_pct, self.song_voice,
@@ -1492,7 +1504,8 @@ class Frame(wx.Frame):
                            lambda res: wx.CallAfter(self._heard, res))
 
     def on_keys(self, _evt):
-        for line in ('F6  move between the tracks list and the notes list',
+        for line in ('Ctrl+Z  undo, Ctrl+Shift+Z  redo',
+                     'F6  move between the tracks list and the notes list',
                      'Ctrl+T  add a track. Each track has its own voice, '
                      'volume, pan and notes',
                      'Enter on a track  its name, voice, volume and pan',
@@ -1684,6 +1697,7 @@ class Frame(wx.Frame):
         i = self.tracks_list.GetFirstSelected()
         return i if 0 <= i < len(self.tracks) else self.current
 
+    @undoable('mute or solo track')
     def toggle_track(self, field):
         """S and M on a track: solo it, or mute it.
 
@@ -1708,6 +1722,7 @@ class Frame(wx.Frame):
             n += 1
         return 'Voice %d' % n
 
+    @undoable('add track')
     def on_track_new(self, _evt):
         t = project.Track(name=self.track_name(), program=self.track.program)
         self.tracks.insert(self.current + 1, t)
@@ -1718,6 +1733,7 @@ class Frame(wx.Frame):
         self.say('added %s. Enter on a track sets its voice, volume and pan.'
                  % t.name)
 
+    @undoable('track settings')
     def on_track_edit(self, _evt):
         i = self.track_at()
         t = self.tracks[i]
@@ -1738,6 +1754,7 @@ class Frame(wx.Frame):
                         else "the song's voice controls"))
         dlg.Destroy()
 
+    @undoable('remove track')
     def on_track_remove(self, _evt):
         if len(self.tracks) == 1:
             self.say('a song needs at least one track')
@@ -1760,6 +1777,7 @@ class Frame(wx.Frame):
                  % (t.name, len(self.tracks),
                     '' if len(self.tracks) == 1 else 's'))
 
+    @undoable('move track')
     def move_tracks(self, delta):
         """Ctrl+Up and Ctrl+Down on a track: put the parts in another order."""
         i = self.track_at()
@@ -1847,6 +1865,7 @@ class Frame(wx.Frame):
                 return
         self.say('the song ends at bar %d' % last)
 
+    @undoable('add bar rest')
     def on_bar_rest(self, _evt):
         """Fill the rest of the bar with silence.
 
@@ -1942,6 +1961,7 @@ class Frame(wx.Frame):
         for k, where in enumerate(self.bars()):
             self.list.SetItem(k, 5, where)
 
+    @undoable('transpose notes')
     def nudge_pitch(self, by):
         rows = self.selected()
         if not rows:
@@ -1960,6 +1980,7 @@ class Frame(wx.Frame):
         self.announce_note(message, self.list, rows[0])
         self.preview_note(rows[0])
 
+    @undoable('change note length')
     def nudge_length(self, up):
         """Move the selected note a sixteenth note longer or shorter."""
         rows = self.selected()
@@ -2006,6 +2027,7 @@ class Frame(wx.Frame):
         self.select_only(list(range(len(self.notes))))
         self.say('all %d notes selected' % len(self.notes))
 
+    @undoable('move notes')
     def move_notes(self, delta):
         """Shift the selected notes one place earlier or later in the song.
 
@@ -2075,6 +2097,7 @@ class Frame(wx.Frame):
         self.say('copied %s' % (picked[0].label() if len(picked) == 1
                                 else '%d notes' % len(picked)))
 
+    @undoable('cut notes')
     def on_cut(self, _evt):
         rows = self.selected()
         if not rows:
@@ -2087,6 +2110,7 @@ class Frame(wx.Frame):
         self.sync(select=min(rows[0], len(self.notes) - 1))
         self.say('cut %d note%s' % (len(rows), '' if len(rows) == 1 else 's'))
 
+    @undoable('paste notes')
     def on_paste(self, _evt):
         rows = project.from_clipboard(self.from_clipboard())
         if not rows:
@@ -2104,6 +2128,7 @@ class Frame(wx.Frame):
                  % (len(added), '' if len(added) == 1 else 's',
                     ', '.join(n.label() for n in added[:4])))
 
+    @undoable('add word')
     def on_add_word(self, _evt):
         last = self.last()
         with AddWordDialog(self, self,
@@ -2123,6 +2148,7 @@ class Frame(wx.Frame):
                     '' if len(added) == 1 else 's',
                     ', '.join(n.text() for n in added)))
 
+    @undoable('add note')
     def on_add_note(self, _evt):
         last = self.last()
         seed = Note([], last.pitch if last else DEFAULT_PITCH,
@@ -2135,6 +2161,7 @@ class Frame(wx.Frame):
         self.sync(select=len(self.notes) - 1)
         self.say('added a note: %s' % (self.notes[-1].text() or 'empty'))
 
+    @undoable('add rest')
     def on_add_rest(self, _evt):
         """Insert a silence after the selected note, or at the end.
 
@@ -2153,6 +2180,7 @@ class Frame(wx.Frame):
         self.say('added a rest of %s. Alt+Right and Alt+Left change it.'
                  % beat_count(rest.beats))
 
+    @undoable('edit note')
     def on_edit(self, _evt):
         i = self.selection()
         if i < 0:
@@ -2167,6 +2195,7 @@ class Frame(wx.Frame):
         self.say('note %d is %s at %s' % (i + 1, self.notes[i].text(),
                                           pitch_name(self.notes[i].pitch)))
 
+    @undoable('remove notes')
     def on_remove(self, _evt):
         rows = self.selected()
         if not rows:
@@ -2500,6 +2529,52 @@ class Frame(wx.Frame):
 
     # -- projects ----------------------------------------------------------
 
+    def _snapshot(self):
+        fields = ('bpm', 'sig', 'consonant_pct', 'song_voice',
+                  'song_reverb', 'anticipate')
+        document = {name: deepcopy(getattr(self, name)) for name in fields}
+        document['tracks'] = [project._track_doc(t) for t in self.tracks]
+        return deepcopy(dict(document=document, tracks=self.tracks,
+                             current=self.current, selected=self.selected()))
+
+    def _history_status(self):
+        self.touch(dirty=self._snapshot()['document'] != self._history.saved)
+
+    def _update_history(self, evt):
+        entries = (self._history.undo if evt.GetId() == wx.ID_UNDO
+                   else self._history.redo)
+        action = 'Undo' if evt.GetId() == wx.ID_UNDO else 'Redo'
+        shortcut = 'Ctrl+Z' if evt.GetId() == wx.ID_UNDO else 'Ctrl+Shift+Z'
+        evt.Enable(bool(entries))
+        evt.SetText('%s%s\t%s' % (action, ' ' + entries[-1][2] if entries
+                                   else '', shortcut))
+
+    def on_undo(self, _evt):
+        self._restore_history()
+
+    def on_redo(self, _evt):
+        self._restore_history(redo=True)
+
+    def _restore_history(self, redo=False):
+        result = self._history.step(redo)
+        if result is None:
+            self.say('nothing to redo' if redo else 'nothing to undo')
+            return
+        state, label = result
+        if self._preview_timer is not None:
+            self._preview_timer.Stop()
+            self._preview_timer = None
+        self.stop_audio()
+        for name, value in state['document'].items():
+            if name != 'tracks':
+                setattr(self, name, value)
+        self.tracks = state['tracks']
+        self.sync_tracks(select=state['current'])
+        self.sync()
+        self.select_only(state['selected'])
+        self._history_status()
+        self.say(('redid ' if redo else 'undid ') + label)
+
     def touch(self, dirty=True):
         """Note that the song has changed, and show it in the title."""
         self.dirty = dirty
@@ -2554,6 +2629,7 @@ class Frame(wx.Frame):
             recovery.clear()
             return
         self.take(bpm, tracks, was, sig, consonants, voice, reverb, early)
+        self._history.saved = None
         self.touch(dirty=True)
         self.say('recovered %d notes%s. Save it somewhere before going on.'
                  % (sum(len(t.notes) for t in self.tracks),
@@ -2561,7 +2637,7 @@ class Frame(wx.Frame):
 
     def may_discard(self, what):
         """Ask before throwing away unsaved work. True to go ahead."""
-        if not self.dirty or not any(t.notes for t in self.tracks):
+        if not self.dirty:
             return True
         answer = wx.MessageBox(
             'This song has changes that have not been saved. %s anyway?'
@@ -2598,6 +2674,7 @@ class Frame(wx.Frame):
         self.path = path
         self.sync_tracks(select=0)
         self.sync(select=0)
+        self._history = History(self._snapshot()['document'] if path else None)
         self.touch(dirty=path is None)
 
     def on_new(self, _evt):
@@ -2608,6 +2685,7 @@ class Frame(wx.Frame):
         self.path = None
         self.sync_tracks(select=0)
         self.sync()
+        self._history = History(self._snapshot()['document'])
         self.touch(dirty=False)
         self.say('new song')
 
@@ -2656,6 +2734,7 @@ class Frame(wx.Frame):
             self.say('could not save: %s' % exc)
             return
         self.path = path
+        self._history.saved = self._snapshot()['document']
         self.touch(dirty=False)
         self.say('saved %s: %d track%s, %d notes'
                  % (os.path.basename(path), len(self.tracks),
@@ -2733,6 +2812,7 @@ class Frame(wx.Frame):
                 lambda res: wx.CallAfter(self._imported_words, rows_by_track,
                                          pending, res))
 
+    @undoable('pronounce imported words')
     def _imported_words(self, rows_by_track, pending, res):
         """Fill in the pronunciations for a MIDI that carried only lyrics."""
         found = res or {}
