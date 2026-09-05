@@ -25,12 +25,15 @@ def _cocoa():
 
 
 def announce(control, text):
-    """Post a VoiceOver announcement on the UI thread; report availability.
+    """Post a screen reader announcement on the UI thread; report availability.
 
     Cocoa's NSString/NSDictionary are toll-free bridged to their CF types.
     Using system frameworks keeps the packaged app independent of PyObjC.
     The notification is delivered by the screen reader, in its chosen voice.
     """
+    if sys.platform == 'win32':
+        from app.accessibility_windows import announce as announce_windows
+        return announce_windows(control, text)
     if sys.platform != 'darwin':
         return False
     appkit, cf = _cocoa()
