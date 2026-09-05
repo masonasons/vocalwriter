@@ -141,6 +141,9 @@ loud as Robert; the track's volume is the place to fix that.
 | Ctrl+Shift+S / Ctrl+Shift+T | export one WAV / one WAV per track |
 | F1 | list the keys in Messages |
 
+On macOS, Hear Note uses **Option+H**, leaving Command+H available to hide
+the app. Play from the start uses **Command+P**.
+
 The picker inside the note editor offers **all 56** phonemes the engine can
 pronounce -- the application's own palette shows fifty, and the seven it leaves
 out are real, with formants and durations like any other, so they are here too.

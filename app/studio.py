@@ -1299,9 +1299,14 @@ class Frame(wx.Frame):
                                    'Play or &stop (Space)',
                                    'Play from the note the cursor is on, or '
                                    'stop if it is going')
-        play.Append(ID_PLAY, 'Play from the &start	Ctrl+P',
+        # Native menu accelerators speak their names in VoiceOver. Handle
+        # playback directly, keeping the shortcut visible in the menu label.
+        modifier = 'Cmd' if sys.platform == 'darwin' else 'Ctrl'
+        play.Append(ID_PLAY, 'Play from the &start (%s+P)' % modifier,
                     'Sing every track from the beginning')
-        play.Append(ID_HEAR, '&Hear note	Ctrl+H', 'Sing the selected note')
+        hear_modifier = 'Option' if sys.platform == 'darwin' else 'Ctrl'
+        play.Append(ID_HEAR, '&Hear note (%s+H)' % hear_modifier,
+                    'Sing the selected note')
         play.Append(ID_STOP, '&Stop	Ctrl+.', 'Stop playing')
         play.AppendSeparator()
         self.mi_metronome = play.AppendCheckItem(
@@ -1352,6 +1357,7 @@ class Frame(wx.Frame):
         bar.Append(prefs, '&Settings')
         bar.Append(help_, '&Help')
         self.SetMenuBar(bar)
+        self.Bind(wx.EVT_CHAR_HOOK, self.on_playback_shortcut)
 
         for ident, handler in ((ID_ADD_WORD, self.on_add_word),
                                (ID_ADD_NOTE, self.on_add_note),
@@ -1395,6 +1401,23 @@ class Frame(wx.Frame):
                                (ID_AUTO_PREVIEW, self.on_auto_preview),
                                (wx.ID_EXIT, lambda e: self.Close())):
             self.Bind(wx.EVT_MENU, handler, id=ident)
+
+    def on_playback_shortcut(self, evt):
+        """Play directly, without a native menu activation announcement."""
+        code = evt.GetKeyCode()
+        mac = sys.platform == 'darwin'
+        if evt.ShiftDown() or (mac and evt.RawControlDown()):
+            evt.Skip()
+            return
+        command = evt.CmdDown() and not evt.AltDown()
+        hear = (evt.AltDown() and not evt.CmdDown()) if mac else command
+        if code == ord('H') and hear:
+            self.on_hear(evt)
+            return
+        if code == ord('P') and command:
+            self.on_play(evt)
+            return
+        evt.Skip()
 
     def on_song_settings(self, _evt):
         dlg = SongSettingsDialog(self, self.bpm, self.signature(),
@@ -1496,7 +1519,8 @@ class Frame(wx.Frame):
                      'Space  play from the note the cursor is on, or stop '
                      'if it is playing',
                      'Ctrl+P  play every track from the start',
-                     'Ctrl+H  hear the selected note',
+                     ('Option+H' if sys.platform == 'darwin' else 'Ctrl+H')
+                     + '  hear the selected note',
                      'Ctrl+M  metronome on or off, for playing only',
                      'Ctrl+. stop',
                      'Ctrl+O open a project, Ctrl+S save it',
@@ -2247,17 +2271,15 @@ class Frame(wx.Frame):
             return
         self.stop_audio()
         self.rendering = True
-        self.say('rendering one note')
         self.engine.render(self.song([self.notes[i]]), self.preview_wav,
                            lambda res: wx.CallAfter(self._heard, res))
 
     def _heard(self, res):
         self.rendering = False
         if res:
-            self.say('note is %.2f seconds%s'
-                     % (res.get('seconds', 0),
-                        ' from cache' if res.get('cached') else ''))
-            self.play_file(res['path'])
+            self.play_file(res['path'], quiet=True)
+        else:
+            self.say('render failed')
 
     def start_beats(self):
         """Where Space starts from: the note the cursor is on.
@@ -2287,9 +2309,9 @@ class Frame(wx.Frame):
 
     def on_play(self, _evt):
         """Ctrl+P: from the top, wherever the cursor happens to be."""
-        self.start_playing(0.0)
+        self.start_playing(0.0, quiet=True)
 
-    def start_playing(self, start=0.0):
+    def start_playing(self, start=0.0, quiet=False):
         if self.rendering:
             self.say('already rendering')
             return
@@ -2307,15 +2329,16 @@ class Frame(wx.Frame):
         self.stop_audio()          # the file cannot be written while it plays
         self.rendering = True
         self.mi_play.Enable(False)
-        bar, beat = project.bar_and_beat(start, self.signature())
-        self.say('rendering %d track%s from bar %d beat %g, about %.1f seconds'
-                 % (len(live), '' if len(live) == 1 else 's', bar,
-                    round(beat, 2),
-                    (total - start) * 60.0 / self.bpm))
+        if not quiet:
+            bar, beat = project.bar_and_beat(start, self.signature())
+            self.say('rendering %d track%s from bar %d beat %g, about %.1f seconds'
+                     % (len(live), '' if len(live) == 1 else 's', bar,
+                        round(beat, 2),
+                        (total - start) * 60.0 / self.bpm))
         self.engine.render(self.playback(start), self.wav,
-                           lambda res: wx.CallAfter(self._played, res))
+                           lambda res: wx.CallAfter(self._played, res, quiet=quiet))
 
-    def _played(self, res):
+    def _played(self, res, quiet=False):
         self.rendering = False
         self.mi_play.Enable(True)
         if not res:
@@ -2332,12 +2355,15 @@ class Frame(wx.Frame):
             # would give the engine no more room. Either way the song came out
             # short, and saying nothing would leave that to be discovered.
             loud += ', and one phrase was too long to render in one go, so it '                    'stopped early -- a rest anywhere in it renders the two '                    'halves separately'
-        self.say('playing %.2f seconds%s%s'
-                 % (res.get('seconds', 0),
-                    ' from cache' if res.get('cached') else '', loud))
-        self.play_file(res['path'])
+        if not quiet:
+            self.say('playing %.2f seconds%s%s'
+                     % (res.get('seconds', 0),
+                        ' from cache' if res.get('cached') else '', loud))
+        elif loud:
+            self.say(loud.lstrip(', '))
+        self.play_file(res['path'], quiet=quiet)
 
-    def play_file(self, path):
+    def play_file(self, path, quiet=False):
         """Play a WAV through the player, which can also pause it."""
         if not os.path.isfile(path):
             self.say('no audio file to play')
@@ -2345,16 +2371,18 @@ class Frame(wx.Frame):
         size = os.path.getsize(path)
         try:
             if self.player.play(path):
-                self.say('playing %s, %d KB' % (os.path.basename(path),
-                                                size // 1024))
+                if not quiet:
+                    self.say('playing %s, %d KB' % (os.path.basename(path),
+                                                    size // 1024))
                 return
             # nothing native: wx will at least make a noise
             self.sound = wx.adv.Sound(path)
             if not self.sound.IsOk():
                 raise RuntimeError('the file could not be opened')
             self.sound.Play(wx.adv.SOUND_ASYNC)
-            self.say('playing %s, %d KB' % (os.path.basename(path),
-                                            size // 1024))
+            if not quiet:
+                self.say('playing %s, %d KB' % (os.path.basename(path),
+                                                size // 1024))
         except Exception as exc:
             self.say('cannot play (%s). The file is at %s' % (exc, path))
 
