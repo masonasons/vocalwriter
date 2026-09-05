@@ -129,6 +129,7 @@ loud as Robert; the track's volume is the place to fix that.
 | Ctrl+D, or Delete | remove it |
 | Alt+Up / Alt+Down | transpose a semitone |
 | Alt+Right / Alt+Left | a sixteenth note longer or shorter |
+| Ctrl+Z / Ctrl+Shift+Z | undo / redo |
 | Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+A | copy, cut, paste, select all |
 | Ctrl+Up / Ctrl+Down | move a note earlier or later |
 | Ctrl+G | go to a bar |
@@ -140,6 +141,14 @@ loud as Robert; the track's volume is the place to fix that.
 | Ctrl+I | import a MIDI file |
 | Ctrl+Shift+S / Ctrl+Shift+T | export one WAV / one WAV per track |
 | F1 | list the keys in Messages |
+
+Undo and redo cover the last 100 edits to notes, tracks, and song settings.
+The Edit menu names the next action to undo or redo. Opening, importing, or
+starting a new song clears history; saving preserves it. On macOS, use
+Command+Z and Command+Shift+Z.
+
+On macOS, Hear Note uses **Option+H**, leaving Command+H available to hide
+the app. Play from the start uses **Command+P**.
 
 The picker inside the note editor offers **all 56** phonemes the engine can
 pronounce -- the application's own palette shows fifty, and the seven it leaves
