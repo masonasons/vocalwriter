@@ -52,6 +52,54 @@ BEND_EPSILON = 0.01          # semitones below which a point is not worth keepin
 #: one long run of notes. It changes nothing about the sound.
 DEFAULT_SIG = (4, 4)
 
+#: The phoneme that is silence. A note holding nothing else is a rest: it is
+#: not sung, it is the gap the phrases either side of it are placed around.
+REST = '%'
+
+#: What a note is before anything has been said about it: middle C, an eighth.
+DEFAULT_PITCH = 60
+DEFAULT_BEATS = 0.5
+
+#: What a file name may not contain, and what stands in for it. A track can
+#: be called anything at all, including things Windows refuses outright.
+BAD_IN_NAMES = '\\/:*?"<>|'
+
+
+class Note(object):
+    """One note: a pitch, a length, and the phonemes sung on it."""
+
+    def __init__(self, phonemes=None, pitch=DEFAULT_PITCH, beats=DEFAULT_BEATS,
+                 word='', bend=None):
+        self.phonemes = list(phonemes or [])
+        self.pitch = pitch
+        self.beats = beats
+        self.word = word
+        #: [(where in the note, semitones)], `where` from 0 to 1. Attached to
+        #: the note so that moving or retiming it takes its bend along.
+        self.bend = [(float(a), float(v)) for a, v in (bend or ())]
+
+    def text(self):
+        return ' '.join(self.phonemes)
+
+    def is_rest(self):
+        return not self.phonemes or all(p == REST for p in self.phonemes)
+
+    def label(self):
+        """What the list shows: a rest reads as one, not as a per cent sign."""
+        return '(rest)' if self.is_rest() else self.text()
+
+
+def file_name(text, fallback='track'):
+    """A track's name, as much of it as a file can be called.
+
+    Everything unusable becomes a hyphen rather than being dropped, so two
+    tracks whose names differ only in punctuation still come out as two
+    different files.
+    """
+    out = ''.join('-' if c in BAD_IN_NAMES or ord(c) < 32 else c
+                  for c in text)
+    return ' '.join(out.split()).strip(' .-') or fallback
+
 
 class Track(object):
     """One part of a song: its own voice, its own level, its own notes.
@@ -114,6 +162,127 @@ def audible(tracks):
     if solo:
         return solo
     return [t for t in tracks if not t.mute]
+
+
+def tracks_from(docs):
+    """The dictionaries `load` and the MIDI reader give back, as tracks.
+
+    The rows become notes here. Everything that opens a song goes through it,
+    so the window and the command line end up with the same document.
+    """
+    tracks = [Track(name=t.get('name', ''), program=t.get('program', 0),
+                    volume=t.get('volume', 100), pan=t.get('pan', 0),
+                    mute=t.get('mute', False), solo=t.get('solo', False),
+                    voice=t.get('voice'), consonants=t.get('consonants'),
+                    reverb=t.get('reverb'), voice_id=t.get('voice_id'),
+                    notes=[Note(ph, pitch, beats, word, bend)
+                           for ph, pitch, beats, word, bend in t['rows']])
+              for t in docs]
+    return tracks or [Track(name='Voice 1')]
+
+
+def track_voice(track, program_map=None):
+    """Which voice of the bank a part sings with.
+
+    A part written down before the whole bank was offered carries a program
+    number instead; `program_map` says what that program picks, and it is
+    turned into a place in the bank the first time it is asked for, so nothing
+    is lost and nothing has to be converted twice.
+    """
+    if getattr(track, 'voice_id', None) is None:
+        track.voice_id = (program_map or {}).get(track.program, 0)
+    return track.voice_id
+
+
+def part_dict(track, song_voice=None, program_map=None):
+    """One track for the engine. Volume and pan go out as fractions.
+
+    A part with no voice controls of its own is sung with the song's, so the
+    resolving happens here and the engine is handed one set of numbers per
+    track without having to know where they came from.
+    """
+    voice = getattr(track, 'voice', None)
+    if voice is None:
+        voice = song_voice
+    own_reverb = getattr(track, 'reverb', None)
+    return {'program': track.program,
+            'voice_id': track_voice(track, program_map),
+            'volume': track.volume / 100.0,
+            'pan': track.pan / 100.0,
+            'voice': dict(voice or {}),
+            'reverb': (None if own_reverb is None
+                       else {'room': own_reverb[0], 'wet': own_reverb[1]}),
+            'consonants': getattr(track, 'consonants', None),
+            'notes': [{'pitch': n.pitch, 'beats': n.beats,
+                       'phonemes': n.phonemes or [REST]} for n in track.notes],
+            'bends': [[round(at, 5), round(v, 4), bool(sl)]
+                      for at, v, sl in timeline(track.notes)]}
+
+
+def song_dict(bpm, tracks, consonants=1.0, voice=None, reverb=(0, 0),
+              anticipate=True, start=0.0, program_map=None):
+    """The whole song as the engine wants it.
+
+    `tracks` are the parts to sing and nothing else -- mute and solo have no
+    meaning at the far end, so whoever calls this decides what is audible.
+    `consonants` is a fraction here, not a percentage.
+    """
+    reverb = tuple(reverb or (0, 0))
+    return {'bpm': float(bpm),
+            'consonants': float(consonants),
+            'start': round(float(start), 6),
+            'reverb': {'room': reverb[0], 'wet': reverb[1]},
+            'anticipate': bool(anticipate),
+            'tracks': [part_dict(t, voice, program_map) for t in tracks]}
+
+
+def export_jobs(tracks, folder, base='song'):
+    """(track, where it goes) for each track, with no two files alike.
+
+    Every track that has notes in it, muted or not. Mute and solo are how a
+    song is listened to while it is being written; leaving a part out of an
+    export because it happened to be muted at the time would be a nasty thing
+    to discover later, in another program, with the song no longer in front
+    of you.
+    """
+    jobs, taken = [], set()
+    for t in tracks:
+        if not t.notes:
+            continue
+        stem = '%s - %s' % (file_name(base, 'song'), file_name(t.name))
+        name, k = stem, 1
+        while name.lower() in taken:        # two tracks may share a name
+            k += 1
+            name = '%s %d' % (stem, k)
+        taken.add(name.lower())
+        jobs.append((t, os.path.join(folder, name + '.wav')))
+    return jobs
+
+
+def pronounce(rows_by_track, pending, found):
+    """Put the looked-up phonemes on the notes an import left blank.
+
+    Returns (rows, words pronounced). A word the dictionary does not know
+    leaves its note singing DEFAULT_PHONEME rather than falling silent: the
+    note still has a pitch and a length, and the word stays on it to be seen.
+    """
+    found = found or {}
+    rows = [list(r) for r in rows_by_track]
+    got = 0
+    for ti, word, indices in pending:
+        if ti >= len(rows):
+            continue
+        phones = found.get(word) or []
+        if not phones:
+            for i in indices:
+                if 0 <= i < len(rows[ti]) and not rows[ti][i][0]:
+                    row = list(rows[ti][i])
+                    row[0] = [DEFAULT_PHONEME]
+                    rows[ti][i] = tuple(row)
+            continue
+        rows[ti] = fill(rows[ti], word, indices, phones)
+        got += 1
+    return rows, got
 
 
 def pan_text(pan):

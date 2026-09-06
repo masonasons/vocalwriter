@@ -36,6 +36,8 @@ from app import recovery                                     # noqa: E402
 from app import settings                                     # noqa: E402
 from app import version                                      # noqa: E402
 from app import project                                      # noqa: E402
+from app.project import (DEFAULT_BEATS, DEFAULT_PITCH,
+                         Note, REST)                             # noqa: E402
 from app.engine import Engine                                # noqa: E402
 from app.player import PLAYING, Player                        # noqa: E402
 from ppc import paths, phonology, render                     # noqa: E402
@@ -46,9 +48,6 @@ COLUMNS = (('Phonemes', 165), ('Pitch', 55), ('Beats', 150), ('Word', 95),
            ('Bend', 90), ('Bar', 55))
 TRACK_COLUMNS = (('Track', 150), ('Voice', 120), ('Volume', 70),
                  ('Pan', 90), ('State', 90))
-DEFAULT_PITCH = 60
-DEFAULT_BEATS = 0.5
-
 #: Alt with the arrow keys nudges the selected note: up and down by a
 #: semitone, right and left by a sixteenth note. A beat is a quarter note, so
 #: a sixteenth is 0.25 beats; MIN_BEATS keeps a note from vanishing.
@@ -100,11 +99,6 @@ def note_value(beats):
             return name
     return ''
 
-#: The phoneme that is silence. A note holding nothing else is a rest: it is
-#: not sung, it is the gap the phrases either side of it are placed around.
-REST = '%'
-
-
 def bend_text(value):
     """One end of a bend as something to put in a text field."""
     return '' if value is None else '%g' % round(value, 3)
@@ -119,23 +113,6 @@ def read_bend(text):
         return float(text)
     except ValueError:
         return None
-
-
-#: What a file name may not contain, and what stands in for it. A track can
-#: be called anything at all, including things Windows refuses outright.
-BAD_IN_NAMES = '\\/:*?"<>|'
-
-
-def file_name(text, fallback='track'):
-    """A track's name, as much of it as a file can be called.
-
-    Everything unusable becomes a hyphen rather than being dropped, so two
-    tracks whose names differ only in punctuation still come out as two
-    different files.
-    """
-    out = ''.join('-' if c in BAD_IN_NAMES or ord(c) < 32 else c
-                  for c in text)
-    return ' '.join(out.split()).strip(' .-') or fallback
 
 
 #: How long the song has to stop changing for before a copy is kept.
@@ -384,30 +361,6 @@ def relabel(ctrl, label):
     if named is not None:
         named.name = label
     ctrl.SetName(label)
-
-
-class Note(object):
-    """One note: a pitch, a length, and the phonemes sung on it."""
-
-    def __init__(self, phonemes=None, pitch=DEFAULT_PITCH, beats=DEFAULT_BEATS,
-                 word='', bend=None):
-        self.phonemes = list(phonemes or [])
-        self.pitch = pitch
-        self.beats = beats
-        self.word = word
-        #: [(where in the note, semitones)], `where` from 0 to 1. Attached to
-        #: the note so that moving or retiming it takes its bend along.
-        self.bend = [(float(a), float(v)) for a, v in (bend or ())]
-
-    def text(self):
-        return ' '.join(self.phonemes)
-
-    def is_rest(self):
-        return not self.phonemes or all(p == REST for p in self.phonemes)
-
-    def label(self):
-        """What the list shows: a rest reads as one, not as a per cent sign."""
-        return '(rest)' if self.is_rest() else self.text()
 
 
 class PhonemePicker(wx.Dialog):
@@ -1116,7 +1069,7 @@ class TrackDialog(wx.Dialog):
 
 
 class Frame(wx.Frame):
-    def __init__(self):
+    def __init__(self, path=None):
         wx.Frame.__init__(self, None, title='VocalWriter Studio',
                           size=(720, 560))
         #: Every part of the song. There is always at least one: a song
@@ -1176,8 +1129,16 @@ class Frame(wx.Frame):
                          lambda r: wx.CallAfter(self._set_program_map, r),
                          programs=list(range(128)))
         self.Bind(wx.EVT_CLOSE, self.on_close)
-        # after the window is up, so the question has something to sit on
-        wx.CallLater(400, self.offer_recovery)
+        if path:
+            # a song named on the command line, or one opened from the
+            # desktop. It is the song that was asked for, so nothing else is
+            # offered over the top of it -- anything kept from a crash is
+            # still there to be offered the next time the program is started
+            # on its own.
+            wx.CallLater(400, self.open_project, path)
+        else:
+            # after the window is up, so the question has something to sit on
+            wx.CallLater(400, self.offer_recovery)
 
     #: The notes of whichever track is selected. Everything that edits notes
     #: goes through this, so adding, nudging, copying and the rest all act on
@@ -1577,16 +1538,8 @@ class Frame(wx.Frame):
         self.sync_tracks(select=self.current)
 
     def track_voice(self, track):
-        """Which voice of the bank a part sings with.
-
-        A part written down before the whole bank was offered carries a
-        program number instead; the engine says what that program picks, and
-        it is turned into a place in the bank the first time it is asked for,
-        so nothing is lost and nothing has to be converted twice.
-        """
-        if getattr(track, 'voice_id', None) is None:
-            track.voice_id = self.program_map.get(track.program, 0)
-        return track.voice_id
+        """Which voice of the bank a part sings with."""
+        return project.track_voice(track, self.program_map)
 
     def _set_voices(self, names):
         self.voice_names = list(names) or ['Robert']
@@ -2240,37 +2193,11 @@ class Frame(wx.Frame):
                 consonants=getattr(t, 'consonants', None),
                 reverb=getattr(t, 'reverb', None),
                 voice_id=self.track_voice(t), notes=notes)]
-        return {'bpm': float(self.bpm),
-                'consonants': self.consonant_pct / 100.0,
-                'start': round(float(start), 6),
-                'reverb': {'room': self.song_reverb[0],
-                           'wet': self.song_reverb[1]},
-                'anticipate': bool(self.anticipate),
-                'tracks': [self.part(t) for t in parts]}
-
-    def part(self, t):
-        """One track for the engine. Volume and pan go out as fractions.
-
-        A part with no voice controls of its own is sung with the song's, so
-        the resolving happens here and the engine is handed one set of numbers
-        per track without having to know where they came from.
-        """
-        voice = getattr(t, 'voice', None)
-        if voice is None:
-            voice = self.song_voice
-        own_reverb = getattr(t, 'reverb', None)
-        return {'program': t.program,
-                'voice_id': self.track_voice(t),
-                'volume': t.volume / 100.0,
-                'pan': t.pan / 100.0,
-                'voice': dict(voice or {}),
-                'reverb': (None if own_reverb is None
-                           else {'room': own_reverb[0], 'wet': own_reverb[1]}),
-                'consonants': getattr(t, 'consonants', None),
-                'notes': [{'pitch': n.pitch, 'beats': n.beats,
-                           'phonemes': n.phonemes or [REST]} for n in t.notes],
-                'bends': [[round(at, 5), round(v, 4), bool(sl)]
-                          for at, v, sl in project.timeline(t.notes)]}
+        return project.song_dict(
+            self.bpm, parts, consonants=self.consonant_pct / 100.0,
+            voice=self.song_voice, reverb=self.song_reverb,
+            anticipate=self.anticipate, start=start,
+            program_map=self.program_map)
 
     def playback(self, start=0.0):
         """The song as it is played: the metronome goes on here and nowhere
@@ -2444,28 +2371,10 @@ class Frame(wx.Frame):
                                         (res or {}).get('seconds', 0))))
 
     def export_jobs(self, folder):
-        """(track, where it goes) for each track, with no two files alike.
-
-        Every track that has notes in it, muted or not. Mute and solo are how
-        a song is listened to while it is being written; leaving a part out of
-        an export because it happened to be muted at the time would be a
-        nasty thing to discover later, in another program, with the song no
-        longer in front of you.
-        """
+        """(track, where it goes) for each track, with no two files alike."""
         base = (os.path.splitext(os.path.basename(self.path))[0]
                 if self.path else 'song')
-        jobs, taken = [], set()
-        for t in self.tracks:
-            if not t.notes:
-                continue
-            stem = '%s - %s' % (file_name(base, 'song'), file_name(t.name))
-            name, k = stem, 1
-            while name.lower() in taken:    # two tracks may share a name
-                k += 1
-                name = '%s %d' % (stem, k)
-            taken.add(name.lower())
-            jobs.append((t, os.path.join(folder, name + '.wav')))
-        return jobs
+        return project.export_jobs(self.tracks, folder, base)
 
     def on_export_tracks(self, _evt):
         """Every track as a file of its own, at its own volume and pan.
@@ -2653,16 +2562,7 @@ class Frame(wx.Frame):
         become notes here -- the note is the editor's own idea, so the file
         reader has no business building one.
         """
-        self.tracks = [project.Track(
-            name=t['name'], program=t['program'], volume=t['volume'],
-            pan=t['pan'], mute=t['mute'], solo=t['solo'],
-            voice=t.get('voice'), consonants=t.get('consonants'),
-            reverb=t.get('reverb'), voice_id=t.get('voice_id'),
-            notes=[Note(ph, pitch, beats, word, bend)
-                   for ph, pitch, beats, word, bend in t['rows']])
-            for t in tracks]
-        if not self.tracks:
-            self.tracks = [project.Track(name='Voice 1')]
+        self.tracks = project.tracks_from(tracks)
         self.bpm = max(30, min(250, int(round(bpm))))
         if sig:
             self.sig = project.parse_sig(project.format_sig(sig))
@@ -2697,6 +2597,10 @@ class Frame(wx.Frame):
             if dlg.ShowModal() != wx.ID_OK:
                 return
             path = dlg.GetPath()
+        self.open_project(path)
+
+    def open_project(self, path):
+        """Open a project by name: the file dialog, and the command line."""
         try:
             (bpm, tracks, sig, consonants, voice, reverb,
              early) = project.load(path)
@@ -2815,25 +2719,7 @@ class Frame(wx.Frame):
     @undoable('pronounce imported words')
     def _imported_words(self, rows_by_track, pending, res):
         """Fill in the pronunciations for a MIDI that carried only lyrics."""
-        found = res or {}
-        rows = [list(r) for r in rows_by_track]
-        got = 0
-        for ti, word, indices in pending:
-            phones = found.get(word) or []
-            if ti >= len(rows):
-                continue
-            if not phones:
-                # a word the dictionary does not know. The note still has a
-                # pitch and a length, so it sings the default vowel rather
-                # than falling silent, and the word stays on it to be seen.
-                for i in indices:
-                    if 0 <= i < len(rows[ti]) and not rows[ti][i][0]:
-                        row = list(rows[ti][i])
-                        row[0] = [project.DEFAULT_PHONEME]
-                        rows[ti][i] = tuple(row)
-                continue
-            rows[ti] = project.fill(rows[ti], word, indices, phones)
-            got += 1
+        rows, got = project.pronounce(rows_by_track, pending, res)
         for ti, track in enumerate(self.tracks):
             if ti < len(rows):
                 track.notes = [Note(ph, pitch, beats, word, bend)
@@ -2858,7 +2744,7 @@ class Frame(wx.Frame):
         evt.Skip()
 
 
-def main():
+def main(path=None):
     missing = paths.missing()
     app = wx.App(False)
     if missing:
@@ -2872,7 +2758,7 @@ def main():
             nl + nl + 'Looked in:' + nl + '  ' + paths.data_root(),
             'VocalWriter files not found', wx.OK | wx.ICON_INFORMATION)
         return
-    Frame().Show()
+    Frame(path).Show()
     app.MainLoop()
 
 

@@ -215,11 +215,48 @@ so playing the same thing twice renders once.
 
 ```
 app/studio.py   the window: notes, phonemes, voices, play
+app/cli.py      the same program with no window: a song in, a WAV out
 app/engine.py   the engine on a worker thread, answering in callbacks
 ppc/engine.py   pronunciations and audio, with the render cache
 ppc/cengine.py  the C synthesiser, loaded through cffi
 ppc/song.py     words + notes -> audio, without a window
 ppc/lexicon.py  words -> phonemes
+```
+
+### From the command line
+
+The editor is also a command line program, for batches and for scripts:
+
+```bash
+python launch.py song.vws -o song.wav
+python launch.py tune.mid -o tune.wav --voice Strings --tempo 96
+python launch.py song.vws --tracks stems
+python launch.py tune.mid --save tune.vws
+python launch.py --list-voices
+python launch.py --pronounce daisy bicycle
+```
+
+A MIDI file is imported exactly as `Ctrl+I` imports it, words looked up in
+VocalWriter's dictionary and all. `--tempo`, `--voice`, `--consonants`,
+`--reverb`, `--from`, `--track` and `--anticipate` override what the file
+says; `--help` lists everything. Given a file and nothing else it opens the
+editor on that song, which is also what happens when a `.vws` file is opened
+from the desktop.
+
+The song is built by `app/project.py`, which is what the window builds its
+songs with as well -- the same dictionary, key for key, so a file rendered
+here and the same file exported from the window are the same audio to the
+sample. That is checked rather than assumed.
+
+A Windows build has two executables in it: `VocalWriterStudio.exe`, which is
+the editor, and `vocalwriter.exe`, which is the same program built as a
+console program so that a shell waits for it and can read what it said.
+Windows decides that when a program is built rather than when it is run, so
+one executable cannot be both. On macOS there is no such distinction and the
+one inside the bundle does both:
+
+```bash
+"/Applications/VocalWriter Studio.app/Contents/MacOS/VocalWriterStudio" song.vws -o song.wav
 ```
 
 ## Singing

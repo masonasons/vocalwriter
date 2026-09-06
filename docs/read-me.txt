@@ -81,6 +81,26 @@ Saving and exporting
 - Ctrl+I imports a MIDI file. If it has no words in it, every note is
   given AA so you can hear the tune before typing anything.
 
+From a script
+
+There is a second program in the Windows folder, vocalwriter.exe, which is
+this one without the window. Give it a project or a MIDI file and somewhere
+to put the audio:
+
+    vocalwriter song.vws -o song.wav
+    vocalwriter tune.mid -o tune.wav --voice Strings --tempo 96
+    vocalwriter song.vws --tracks stems
+
+A MIDI file is imported the way Ctrl+I imports it, words and all. --tempo,
+--voice, --consonants, --reverb, --from and --track change how it is sung
+without changing the file; --save writes a MIDI file out as a project;
+--list-voices names all 87 and --pronounce says what the dictionary makes of
+a word. vocalwriter --help lists the lot.
+
+On a Mac it is the program inside the bundle:
+
+    "/Applications/VocalWriter Studio.app/Contents/MacOS/VocalWriterStudio" song.vws -o song.wav
+
 If it stops working
 
 The song is copied automatically a couple of seconds after you change it. If

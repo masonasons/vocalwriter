@@ -4,7 +4,10 @@
     sh engine/build.sh              # the synthesiser
     pyinstaller VocalWriterStudio.spec
 
-Produces `dist/VocalWriterStudio/`, a folder to zip and send.
+Produces `dist/VocalWriterStudio/`, a folder to zip and send. On Windows it
+holds two executables: VocalWriterStudio, which is the editor, and
+vocalwriter, which is the same program with a console so that a script can
+run it and read what it said. Both take the same arguments; see app/cli.py.
 
 The synthesis is VocalWriter's own code recreated in C (the `engine`
 submodule, github.com/masonasons/VocalWriterC), loaded as a shared library.
@@ -124,8 +127,33 @@ exe = EXE(
     console=False,          # a window, not a terminal
     disable_windowed_traceback=False,
 )
+# The same program again, built as a console program, so that a script can
+# run it and wait for it: `vocalwriter song.vws -o song.wav`. Windows decides
+# whether a program has a console when it is built rather than when it is run,
+# so one executable cannot be both -- a windowed program hands the shell its
+# prompt back immediately and prints into nothing. Both start launch.py and
+# the arguments decide what happens, so this is the same program under another
+# name. Only on Windows: elsewhere a program prints to the terminal that
+# started it whether it has a window or not, and the one executable does both.
+cli = None
+if sys.platform == 'win32':
+    cli = EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        name='vocalwriter',
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,
+        console=True,
+        disable_windowed_traceback=False,
+    )
+
 coll = COLLECT(
     exe,
+    *([cli] if cli else []),
     a.binaries,
     a.datas,
     strip=False,

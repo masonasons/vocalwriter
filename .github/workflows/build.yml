@@ -140,6 +140,44 @@ jobs:
       - name: Package
         run: pyinstaller --noconfirm VocalWriterStudio.spec
 
+      # The only check that runs what is actually being shipped. The command
+      # line is the same program the window is -- same song, same engine, one
+      # entry point -- so a build that can render a song from a shell is a
+      # build whose editor can render one too, and a packaging mistake shows
+      # up here rather than in someone's hands. On Windows that is the second
+      # executable, built with a console so a shell waits for it; on macOS
+      # the one inside the bundle does both.
+      - name: The packaged program must sing
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            vw="dist/VocalWriterStudio/vocalwriter.exe"
+          else
+            vw="dist/VocalWriter Studio.app/Contents/MacOS/VocalWriterStudio"
+          fi
+          python - <<'PY'
+          import json
+          notes = [{'phonemes': ['d', 'EY'], 'pitch': 67, 'beats': 1.0},
+                   {'phonemes': ['z', 'IY'], 'pitch': 65, 'beats': 1.0}]
+          with open('ci-song.vws', 'w') as fh:
+              json.dump({'format': 'vocalwriter-studio', 'version': 2,
+                         'bpm': 100,
+                         'tracks': [{'name': 'Voice 1', 'notes': notes}]}, fh)
+          PY
+          "$vw" --version
+          "$vw" --pronounce daisy
+          "$vw" ci-song.vws --list-tracks
+          "$vw" ci-song.vws -o ci-cli.wav --voice Strings --reverb 40,24
+          python - <<'PY'
+          import wave
+          w = wave.open('ci-cli.wav')
+          seconds = w.getnframes() / float(w.getframerate())
+          print('the packaged program rendered %.2f seconds, %d channels'
+                % (seconds, w.getnchannels()))
+          assert seconds > 1.0, 'it wrote a file with nothing in it'
+          assert w.getnchannels() == 2, 'the reverb should have made it stereo'
+          PY
+
       # The guide goes beside the program rather than inside it, so that
       # someone who unzips the folder can read it without running anything.
       # Each platform puts it where that platform's folder is: on macOS the
