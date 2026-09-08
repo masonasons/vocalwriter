@@ -661,8 +661,16 @@ def from_midi(path, track_name=None, rest_beats=None, grid=None):
         start = edge(n.tick)
         end = max(start + 1, edge(n.tick + span))
         if i + 1 < len(ordered):
-            # one voice: nothing is held over the note that follows it
-            end = min(end, max(start + 1, edge(ordered[i + 1].tick)))
+            # One voice: nothing is held over the note that follows it. Where
+            # the file leaves no gap the grid can see -- the tick a sequencer
+            # shaves off a note so the next one speaks -- the note runs on to
+            # where the next one starts. Rounding the two edges separately
+            # instead would invent a rest out of that tick whenever they
+            # happened to round opposite ways, which is once in every two
+            # notes that have drifted off the grid.
+            nxt = max(start + 1, edge(ordered[i + 1].tick))
+            gap = int(round((ordered[i + 1].tick - n.tick - span) / div / step))
+            end = nxt if gap <= 0 else min(end, nxt)
         if start > at and (rest_beats is None
                            or (start - at) * step >= rest_beats):
             rows.append([['%'], n.pitch, (start - at) * step, '', []])
