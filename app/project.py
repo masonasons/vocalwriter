@@ -500,11 +500,31 @@ def from_clipboard(text):
 
 # -- MIDI ------------------------------------------------------------------
 
+def _named_tracks(midi):
+    """Every track with notes in it, each paired with a name of its own.
+
+    The name is how a caller says which track it wants, so two tracks must
+    never answer to the same one. MIDI files routinely leave every track
+    unnamed -- and a file that names two of them "Piano" is ordinary -- so a
+    repeated name is numbered here. Without this, asking for five parts of an
+    unnamed file returns the first part five times, which is what the editor
+    then shows: five tracks, all singing the same notes.
+    """
+    out, seen = [], {}
+    for track in midi.tracks:
+        if not track.notes:
+            continue
+        base = track.name or 'untitled'
+        seen[base] = seen.get(base, 0) + 1
+        name = base if seen[base] == 1 else '%s %d' % (base, seen[base])
+        out.append((name, track))
+    return out
+
+
 def midi_tracks(path):
     """The tracks worth importing, as [(name, note count)]."""
-    midi = MidiFile.from_file(path)
-    return [(t.name or 'untitled', len(t.notes))
-            for t in midi.tracks if t.notes]
+    return [(name, len(track.notes))
+            for name, track in _named_tracks(MidiFile.from_file(path))]
 
 
 def _tempo(midi):
@@ -549,15 +569,16 @@ def from_midi(path, track_name=None, rest_beats=0.25, grid=0.25):
     to sing, so an ordinary MIDI file arrives as a song that can be played.
     """
     midi = MidiFile.from_file(path)
-    tracks = [t for t in midi.tracks if t.notes]
-    if not tracks:
+    named = _named_tracks(midi)
+    if not named:
         raise ValueError('this file has no notes in it')
     if track_name:
-        match = [t for t in tracks if (t.name or 'untitled') == track_name]
+        match = [t for name, t in named if name == track_name]
         if not match:
             raise ValueError('no track named %r' % track_name)
-        tracks = match
-    track = tracks[0]
+        track = match[0]
+    else:
+        track = named[0][1]
 
     div = float(midi.division or 480)
     curve = bend_curve(track)
