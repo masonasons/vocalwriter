@@ -739,6 +739,17 @@ def _bend_over(curve, start, end):
 
     The value in force when the note begins is carried in as a point at 0, so a
     note that starts partway through a slide still starts on the right pitch.
+
+    MIDI's bend is a staircase: an event sets a value and that value stands
+    until another event moves it, so moving it takes one event rather than a
+    curve. A note's bend in the editor slides from each of its points to the
+    next, which is what a bend drawn by hand wants, so a step is written out
+    here as the two points a step really has -- the old value held right up to
+    the moment, and the new value at it. Sliding between two points of the
+    same value is standing still, and sliding to a point at the same moment
+    takes no time, so both come out as the jump the file asked for, while a
+    bend the file did write as a curve still arrives as one, being a great
+    many small steps.
     """
     span = float(max(end - start, 1))
     inside = [((t - start) / span, v) for t, v in curve if start <= t < end]
@@ -748,7 +759,12 @@ def _bend_over(curve, start, end):
         return []
     if not inside or inside[0][0] > 0.0:
         inside.insert(0, (0.0, held))
-    return [(round(a, 4), round(v, 4)) for a, v in inside]
+    steps = []
+    for k, (at, value) in enumerate(inside):
+        if k and inside[k - 1][1] != value:
+            steps.append((at, inside[k - 1][1]))
+        steps.append((at, value))
+    return [(round(a, 4), round(v, 4)) for a, v in steps]
 
 
 def timeline(notes):
