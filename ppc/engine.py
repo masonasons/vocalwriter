@@ -29,7 +29,8 @@ from ppc import paths                                        # noqa: E402
 from ppc.lexicon import open_lexicon                         # noqa: E402
 from ppc.midi import syllable_lengths                        # noqa: E402
 from ppc.phonology import is_nucleus, targets                # noqa: E402
-from ppc.render import (SAMPLE_RATE, Note, Renderer,         # noqa: E402
+from ppc.render import (SAMPLE_RATE, SAMPLES_PER_FRAME,       # noqa: E402
+                        Note, Renderer,
                         write_wav)
 from ppc.render import engine_name, open_engine              # noqa: E402
 from tools.ttvi import load as load_ttvi, phoneme_order      # noqa: E402
@@ -317,6 +318,34 @@ def tracks_of(song):
 def is_rest(phonemes):
     """A note nobody sings: no phonemes, or nothing but silence."""
     return not phonemes or all(p == '%' for p in phonemes)
+
+
+def keep_time(notes, bpm):
+    """Nudge each note's length so the engine's rounding cannot pile up.
+
+    The engine plays a note for a whole number of frames and drops what is
+    left over, so a note runs up to one frame -- five milliseconds -- shorter
+    than it was asked for. Alone that is nothing. Over a phrase it is the
+    phrase creeping forward, a few milliseconds a note, until forty notes in
+    it is a tenth of a second ahead of everything else in the song. Then a
+    rest ends the phrase, the next one is placed on the beat it belongs to,
+    and the whole error vanishes at a stroke -- which is why it sounds like
+    the part is running away and being caught rather than simply being wrong.
+
+    Each note is therefore asked for the length that lands the note after it
+    on the frame the score puts it on, so the leftover is spent rather than
+    saved. Half a frame is added because the engine drops the remainder: it
+    puts the length safely inside the frame that is wanted rather than on the
+    edge of it.
+    """
+    frame = SAMPLES_PER_FRAME / float(SAMPLE_RATE)
+    spb = 60.0 / bpm
+    at, done = 0.0, 0
+    for note in notes:
+        at += note.beats * spb
+        step = max(1, int(round(at / frame)) - done)
+        note.beats = (step + 0.5) * frame / spb
+        done += step
 
 
 def phrases(entries):
@@ -663,6 +692,7 @@ class Engine(object):
                                   velocity=int(e.get('velocity', vel)),
                                   durations=syllable_lengths(
                                       ph, beats * 60000.0 / bpm, consonants)))
+            keep_time(notes, bpm)
             lead = (anticipate(notes, bpm, consonants, at - was_over)
                     if early else 0.0)
             was_over = at + sum(n.beats for n in notes) - lead
