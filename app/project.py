@@ -631,9 +631,14 @@ def from_midi(path, track_name=None, rest_beats=0.25, grid=None):
 
     div = float(midi.division or 480)
     curve = bend_curve(track)
-    rows, cursor = [], None
+    # Counting from the start of the file rather than from the track's own
+    # first note. A part that comes in late is written that way -- the pickup
+    # in one part and not in the others is the arrangement -- and starting
+    # every part at its own first note stacks them all on beat one, which puts
+    # the parts out with each other and every note in the wrong bar.
+    rows, cursor = [], 0
     for n in sorted(track.notes, key=lambda x: x.tick):
-        gap = 0.0 if cursor is None else (n.tick - cursor) / div
+        gap = (n.tick - cursor) / div
         if gap >= rest_beats:
             rows.append([['%'], n.pitch, quantise(gap, grid), '', []])
         beats = quantise(max(n.duration, 1) / div, grid)
