@@ -29,7 +29,8 @@ from ppc import paths                                        # noqa: E402
 from ppc.lexicon import open_lexicon                         # noqa: E402
 from ppc.midi import syllable_lengths                        # noqa: E402
 from ppc.phonology import is_nucleus, targets                # noqa: E402
-from ppc.render import (SAMPLE_RATE, Note, Renderer,         # noqa: E402
+from ppc.render import (SAMPLE_RATE, SAMPLES_PER_FRAME,       # noqa: E402
+                        Note, Renderer,
                         write_wav)
 from ppc.render import engine_name, open_engine              # noqa: E402
 from tools.ttvi import load as load_ttvi, phoneme_order      # noqa: E402
@@ -319,6 +320,34 @@ def is_rest(phonemes):
     return not phonemes or all(p == '%' for p in phonemes)
 
 
+def keep_time(notes, bpm):
+    """Nudge each note's length so the engine's rounding cannot pile up.
+
+    The engine plays a note for a whole number of frames and drops what is
+    left over, so a note runs up to one frame -- five milliseconds -- shorter
+    than it was asked for. Alone that is nothing. Over a phrase it is the
+    phrase creeping forward, a few milliseconds a note, until forty notes in
+    it is a tenth of a second ahead of everything else in the song. Then a
+    rest ends the phrase, the next one is placed on the beat it belongs to,
+    and the whole error vanishes at a stroke -- which is why it sounds like
+    the part is running away and being caught rather than simply being wrong.
+
+    Each note is therefore asked for the length that lands the note after it
+    on the frame the score puts it on, so the leftover is spent rather than
+    saved. Half a frame is added because the engine drops the remainder: it
+    puts the length safely inside the frame that is wanted rather than on the
+    edge of it.
+    """
+    frame = SAMPLES_PER_FRAME / float(SAMPLE_RATE)
+    spb = 60.0 / bpm
+    at, done = 0.0, 0
+    for note in notes:
+        at += note.beats * spb
+        step = max(1, int(round(at / frame)) - done)
+        note.beats = (step + 0.5) * frame / spb
+        done += step
+
+
 def phrases(entries):
     """[(start in beats, [note...])] between the rests, and the total length.
 
@@ -519,6 +548,9 @@ class Engine(object):
         added together -- so two parts in the same room go through one
         reverberator and share its tail, and a part in a room of its own is not
         dragged into theirs.
+
+        Panning moves the voices, not the room they are singing in, so each
+        group goes into its reverberator unpanned.
         """
         bpm = float(song.get('bpm', 120))
         consonants = float(song.get('consonants', 1.0))
@@ -538,36 +570,52 @@ class Engine(object):
             left, right = pan_gains(t.get('pan', 0.0))
             own = t.get('reverb')
             rev = song_reverb if own is None else clean_reverb(own)
-            groups.setdefault(rev, []).append((y, vol * left, vol * right))
+            groups.setdefault(rev, []).append((y, vol, left, right))
         parts = [p for group in groups.values() for p in group]
-        n = max(len(y) for y, _l, _r in parts)
+        n = max(len(y) for y, _v, _l, _r in parts)
         stereo = (any(abs(float(t.get('pan', 0.0))) > 1e-6 for t in tracks)
                   or any(wet > 0 for _room, wet in groups))
         if stereo:
             mixes = []
             for rev, group in groups.items():
                 mix = np.zeros((n, 2), dtype=np.float32)
-                for y, gl, gr in group:
-                    mix[:len(y), 0] += y * gl
-                    mix[:len(y), 1] += y * gr
-                mixes.append((rev, mix))
+                # the same voices with the panning left off, which is what
+                # the reverberator is given
+                room = np.zeros((n, 2), dtype=np.float32)
+                for y, vol, gl, gr in group:
+                    mix[:len(y), 0] += y * (vol * gl)
+                    mix[:len(y), 1] += y * (vol * gr)
+                    room[:len(y), 0] += y * vol
+                    room[:len(y), 1] += y * vol
+                mixes.append((rev, mix, room))
             # Several voices at once can add up past full scale. Turning the
             # mix down is a great deal better than clipping it -- and it has
             # to happen before the reverb, which works on 16-bit samples and
             # would clip whatever it was handed.
-            peak = float(np.abs(sum(m for _r, m in mixes)).max()) if n else 0.0
+            peak = float(np.abs(sum(m for _r, m, _q in mixes)).max()) if n else 0.0
             if peak > 1.0:
-                for _rev, mix in mixes:
+                for _rev, mix, room in mixes:
                     mix /= peak
-            done = [self._reverberate(mix, rev) for rev, mix in mixes]
+                    room /= peak
+            done = []
+            for rev, mix, room in mixes:
+                # The reverberator is handed the group unpanned and the
+                # panning added back afterwards, at the gain it mixes the dry
+                # signal in with -- one minus the wet. Handing it the panned
+                # mix instead pans the room along with the voice: a part sung
+                # hard left is answered by a room that is also hard left,
+                # which is not what a room does.
+                out = np.array(self._reverberate(room, rev))
+                out[:n] += (mix - room) * (1.0 - rev[1] / 100.0)
+                done.append(out)
             # a reverb tail makes its group longer than the singing
             out = np.zeros((max(len(d) for d in done), 2), dtype=np.float32)
             for d in done:
                 out[:len(d)] += d
             return out, peak
         out = np.zeros(n, dtype=np.float32)
-        for y, gl, _gr in parts:          # in the middle both gains are the
-            out[:len(y)] += y * gl        # volume, so one channel says it all
+        for y, vol, gl, _gr in parts:     # in the middle both gains are the
+            out[:len(y)] += y * (vol * gl)  # volume, so one channel says it all
         peak = float(np.abs(out).max()) if n else 0.0
         if peak > 1.0:
             # the caller is told the number, so that it can say so rather than
@@ -649,7 +697,13 @@ class Engine(object):
             except (TypeError, ValueError):
                 pass
         # [(beat, semitones, slides into the next)], in the song's own time
-        bends = sorted(_triples(track.get('bends') or []))
+        # by time alone: two points may share a moment -- that is how a bend
+        # that steps rather than slides is written down, the old value held
+        # right up to the moment and the new one at it -- and sorting on the
+        # whole point would put them in order of value instead, turning the
+        # step into a slide down, a jump back up and a slide down again
+        bends = sorted(_triples(track.get('bends') or []),
+                       key=lambda point: point[0])
         runs, total = phrases(track.get('notes') or [])
         length = max(0.0, total - start) * spb + TAIL_SECONDS
         out = np.zeros(int(round(length * SAMPLE_RATE)), dtype=np.float32)
@@ -663,6 +717,7 @@ class Engine(object):
                                   velocity=int(e.get('velocity', vel)),
                                   durations=syllable_lengths(
                                       ph, beats * 60000.0 / bpm, consonants)))
+            keep_time(notes, bpm)
             lead = (anticipate(notes, bpm, consonants, at - was_over)
                     if early else 0.0)
             was_over = at + sum(n.beats for n in notes) - lead

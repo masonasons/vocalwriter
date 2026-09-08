@@ -500,11 +500,31 @@ def from_clipboard(text):
 
 # -- MIDI ------------------------------------------------------------------
 
+def _named_tracks(midi):
+    """Every track with notes in it, each paired with a name of its own.
+
+    The name is how a caller says which track it wants, so two tracks must
+    never answer to the same one. MIDI files routinely leave every track
+    unnamed -- and a file that names two of them "Piano" is ordinary -- so a
+    repeated name is numbered here. Without this, asking for five parts of an
+    unnamed file returns the first part five times, which is what the editor
+    then shows: five tracks, all singing the same notes.
+    """
+    out, seen = [], {}
+    for track in midi.tracks:
+        if not track.notes:
+            continue
+        base = track.name or 'untitled'
+        seen[base] = seen.get(base, 0) + 1
+        name = base if seen[base] == 1 else '%s %d' % (base, seen[base])
+        out.append((name, track))
+    return out
+
+
 def midi_tracks(path):
     """The tracks worth importing, as [(name, note count)]."""
-    midi = MidiFile.from_file(path)
-    return [(t.name or 'untitled', len(t.notes))
-            for t in midi.tracks if t.notes]
+    return [(name, len(track.notes))
+            for name, track in _named_tracks(MidiFile.from_file(path))]
 
 
 def _tempo(midi):
@@ -527,7 +547,54 @@ def quantise(beats, grid):
     return max(grid, round(beats / grid) * grid)
 
 
-def from_midi(path, track_name=None, rest_beats=0.25, grid=0.25):
+#: The grids a length can be rounded onto. A sixteenth is the usual one, but
+#: it cannot express a triplet: a third of a beat lands on a quarter of one,
+#: which is a quarter of the note gone. A piece written in triplets -- a 12/8
+#: ballad is the ordinary case -- loses that much from most of its notes, and
+#: the part carrying the triplets then runs ahead of the rest of the song as
+#: though its tempo were set too high. A twelfth of a beat holds both a
+#: sixteenth (three twelfths) and a triplet eighth (four), so it is used for a
+#: file whose own lengths sit on it.
+SIXTEENTH_GRID = 0.25
+TRIPLET_GRID = 1.0 / 12.0
+#: How far off a grid a length may sit and still count as being on it. A
+#: sequencer writes a note a tick or two short so the next one speaks, and
+#: that much slop is well inside a sixty-fourth note; a human playing loosely
+#: is not, and a loose performance is exactly what the coarser grid is for.
+GRID_SLOP = 1.0 / 32.0
+
+
+def off_grid(beats, grid):
+    """How far a length sits from the nearest multiple of `grid`."""
+    return abs(beats - quantise(beats, grid))
+
+
+def choose_grid(lengths):
+    """The grid to round `lengths` onto: a twelfth of a beat, or a sixteenth.
+
+    The finer grid is taken only when the file asks for it -- when a real
+    share of its lengths miss the sixteenth grid and land on the twelfth,
+    which is what a triplet does and what a sloppy performance does not. A
+    file that is already straight rounds exactly as it always has.
+    """
+    lengths = list(lengths)
+    if not lengths:
+        return SIXTEENTH_GRID
+    triplets = [b for b in lengths
+                if off_grid(b, SIXTEENTH_GRID) > GRID_SLOP
+                and off_grid(b, TRIPLET_GRID) <= GRID_SLOP]
+    return (TRIPLET_GRID if len(triplets) * 10 >= len(lengths)
+            else SIXTEENTH_GRID)
+
+
+def midi_grid(midi):
+    """The grid for a whole file, so its parts cannot land on different ones."""
+    div = float(midi.division or 480)
+    return choose_grid(max(n.duration, 1) / div
+                       for t in midi.tracks for n in t.notes)
+
+
+def from_midi(path, track_name=None, rest_beats=None, grid=None):
     """Turn a MIDI track into editor notes.
 
     Returns (bpm, rows, pending), where a row is
@@ -541,32 +608,73 @@ def from_midi(path, track_name=None, rest_beats=0.25, grid=0.25):
     before being looked up and the pronunciation is divided over the notes they
     came from.
 
-    Gaps between notes become rests, so the phrasing survives the trip.
-    `rest_beats` is the shortest gap worth keeping; below it the note simply
-    runs on to the next, which is how a legato line is written.
+    Gaps between notes become rests, so the phrasing survives the trip: a
+    gap is a rest whenever it is still there once both its ends have been put
+    on the grid, which leaves out the tick or two a sequencer shaves off a
+    note without leaving out anything a listener would hear. `rest_beats`
+    raises that bar: a gap shorter than it is sung through instead, which is
+    how a legato line is written.
 
     A note that carries neither phonemes nor a word is given `DEFAULT_PHONEME`
     to sing, so an ordinary MIDI file arrives as a song that can be played.
     """
     midi = MidiFile.from_file(path)
-    tracks = [t for t in midi.tracks if t.notes]
-    if not tracks:
+    if grid is None:
+        grid = midi_grid(midi)
+    named = _named_tracks(midi)
+    if not named:
         raise ValueError('this file has no notes in it')
     if track_name:
-        match = [t for t in tracks if (t.name or 'untitled') == track_name]
+        match = [t for name, t in named if name == track_name]
         if not match:
             raise ValueError('no track named %r' % track_name)
-        tracks = match
-    track = tracks[0]
+        track = match[0]
+    else:
+        track = named[0][1]
 
     div = float(midi.division or 480)
     curve = bend_curve(track)
-    rows, cursor = [], None
-    for n in sorted(track.notes, key=lambda x: x.tick):
-        gap = 0.0 if cursor is None else (n.tick - cursor) / div
-        if gap >= rest_beats:
-            rows.append([['%'], n.pitch, quantise(gap, grid), '', []])
-        beats = quantise(max(n.duration, 1) / div, grid)
+    ordered = sorted(track.notes, key=lambda x: x.tick)
+    # Rounding where each note falls, rather than how long each one is.
+    # Rounding lengths one at a time lets the error mount up until a part is
+    # running ahead of the others, and it cannot tell a rest from the tick a
+    # sequencer shaves off the end of a note so the next one speaks: both are
+    # a gap, and dropping either loses the time it took. Putting every edge on
+    # the grid answers both at once -- the shaved tick lands back where the
+    # note ends, a real rest keeps its own place, and nothing can drift,
+    # because a note reaches exactly as far as the next one's start.
+    #
+    # It also means the count runs from the start of the file rather than
+    # from the track's own first note. A part that comes in late is written
+    # that way -- the pickup in one part and not in the others is the
+    # arrangement -- and starting every part at its own first note would stack
+    # them all on beat one, out with each other and in the wrong bars.
+    step = grid or 1.0 / div
+
+    def edge(ticks):
+        """Which step of the grid a point in the file falls on."""
+        return int(round(ticks / div / step))
+
+    rows, at = [], 0
+    for i, n in enumerate(ordered):
+        span = max(n.duration, 1)
+        start = edge(n.tick)
+        end = max(start + 1, edge(n.tick + span))
+        if i + 1 < len(ordered):
+            # One voice: nothing is held over the note that follows it. Where
+            # the file leaves no gap the grid can see -- the tick a sequencer
+            # shaves off a note so the next one speaks -- the note runs on to
+            # where the next one starts. Rounding the two edges separately
+            # instead would invent a rest out of that tick whenever they
+            # happened to round opposite ways, which is once in every two
+            # notes that have drifted off the grid.
+            nxt = max(start + 1, edge(ordered[i + 1].tick))
+            gap = int(round((ordered[i + 1].tick - n.tick - span) / div / step))
+            end = nxt if gap <= 0 else min(end, nxt)
+        if start > at and (rest_beats is None
+                           or (start - at) * step >= rest_beats):
+            rows.append([['%'], n.pitch, (start - at) * step, '', []])
+            at = start
         word = (n.text or '').strip()
         if n.phonemes:
             ph = [PALETTE.get(x, x) for x in split_phonemes(n.phonemes)]
@@ -574,23 +682,29 @@ def from_midi(path, track_name=None, rest_beats=0.25, grid=0.25):
             ph = []                      # the lookup will fill it in
         else:
             ph = [DEFAULT_PHONEME]
-        span = max(n.duration, 1)
-        rows.append([ph, n.pitch, beats, word,
+        # whatever gap was not worth a rest is sung through, so the note after
+        # it still falls where the file puts it
+        length = max(1, end - at)
+        rows.append([ph, n.pitch, length * step, word,
                      _bend_over(curve, n.tick, n.tick + span)])
-        cursor = n.tick + span
+        at += length
 
     pending = _pending_words(rows)
     return (_tempo(midi), [tuple(r) for r in rows], pending, _sig(midi))
 
 
-def from_midi_tracks(path, names, rest_beats=0.25, grid=0.25):
+def from_midi_tracks(path, names, rest_beats=None, grid=None):
     """Several parts of a MIDI file at once, one editor track for each.
 
     Returns (bpm, time signature, [(name, rows, pending)]). The tempo and the
     signature belong to the file rather than to any one part, so the first
-    part's are the song's.
+    part's are the song's. The grid does too: it is settled once, from every
+    note in the file, or two parts of one song could be rounded onto different
+    grids and drift apart.
     """
     out, bpm, sig = [], 120.0, DEFAULT_SIG
+    if grid is None:
+        grid = midi_grid(MidiFile.from_file(path))
     for k, name in enumerate(names):
         bpm, rows, pending, part_sig = from_midi(path, name, rest_beats, grid)
         if not k:
@@ -633,6 +747,17 @@ def _bend_over(curve, start, end):
 
     The value in force when the note begins is carried in as a point at 0, so a
     note that starts partway through a slide still starts on the right pitch.
+
+    MIDI's bend is a staircase: an event sets a value and that value stands
+    until another event moves it, so moving it takes one event rather than a
+    curve. A note's bend in the editor slides from each of its points to the
+    next, which is what a bend drawn by hand wants, so a step is written out
+    here as the two points a step really has -- the old value held right up to
+    the moment, and the new value at it. Sliding between two points of the
+    same value is standing still, and sliding to a point at the same moment
+    takes no time, so both come out as the jump the file asked for, while a
+    bend the file did write as a curve still arrives as one, being a great
+    many small steps.
     """
     span = float(max(end - start, 1))
     inside = [((t - start) / span, v) for t, v in curve if start <= t < end]
@@ -642,7 +767,12 @@ def _bend_over(curve, start, end):
         return []
     if not inside or inside[0][0] > 0.0:
         inside.insert(0, (0.0, held))
-    return [(round(a, 4), round(v, 4)) for a, v in inside]
+    steps = []
+    for k, (at, value) in enumerate(inside):
+        if k and inside[k - 1][1] != value:
+            steps.append((at, inside[k - 1][1]))
+        steps.append((at, value))
+    return [(round(a, 4), round(v, 4)) for a, v in steps]
 
 
 def timeline(notes):

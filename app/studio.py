@@ -83,12 +83,16 @@ SIXTEENTH = 0.25
 MIN_BEATS = 0.125
 
 #: What the lengths are called, so the Beats column can say "1.5, dotted
-#: quarter" rather than leaving a number to be worked out.
+#: quarter" rather than leaving a number to be worked out. The triplets are
+#: here because a piece in triplets is ordinary -- a 12/8 ballad is one -- and
+#: a third of a beat read out as 0.333333 says nothing about what it is.
 NOTE_VALUES = {
     6.0: 'dotted whole', 4.0: 'whole', 3.0: 'dotted half', 2.0: 'half',
     1.5: 'dotted quarter', 1.0: 'quarter', 0.75: 'dotted eighth',
     0.5: 'eighth', 0.375: 'dotted sixteenth', 0.25: 'sixteenth',
     0.125: 'thirty-second',
+    4.0 / 3.0: 'triplet half', 2.0 / 3.0: 'triplet quarter',
+    1.0 / 3.0: 'triplet eighth', 1.0 / 6.0: 'triplet sixteenth',
 }
 
 
