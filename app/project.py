@@ -547,7 +547,54 @@ def quantise(beats, grid):
     return max(grid, round(beats / grid) * grid)
 
 
-def from_midi(path, track_name=None, rest_beats=0.25, grid=0.25):
+#: The grids a length can be rounded onto. A sixteenth is the usual one, but
+#: it cannot express a triplet: a third of a beat lands on a quarter of one,
+#: which is a quarter of the note gone. A piece written in triplets -- a 12/8
+#: ballad is the ordinary case -- loses that much from most of its notes, and
+#: the part carrying the triplets then runs ahead of the rest of the song as
+#: though its tempo were set too high. A twelfth of a beat holds both a
+#: sixteenth (three twelfths) and a triplet eighth (four), so it is used for a
+#: file whose own lengths sit on it.
+SIXTEENTH_GRID = 0.25
+TRIPLET_GRID = 1.0 / 12.0
+#: How far off a grid a length may sit and still count as being on it. A
+#: sequencer writes a note a tick or two short so the next one speaks, and
+#: that much slop is well inside a sixty-fourth note; a human playing loosely
+#: is not, and a loose performance is exactly what the coarser grid is for.
+GRID_SLOP = 1.0 / 32.0
+
+
+def off_grid(beats, grid):
+    """How far a length sits from the nearest multiple of `grid`."""
+    return abs(beats - quantise(beats, grid))
+
+
+def choose_grid(lengths):
+    """The grid to round `lengths` onto: a twelfth of a beat, or a sixteenth.
+
+    The finer grid is taken only when the file asks for it -- when a real
+    share of its lengths miss the sixteenth grid and land on the twelfth,
+    which is what a triplet does and what a sloppy performance does not. A
+    file that is already straight rounds exactly as it always has.
+    """
+    lengths = list(lengths)
+    if not lengths:
+        return SIXTEENTH_GRID
+    triplets = [b for b in lengths
+                if off_grid(b, SIXTEENTH_GRID) > GRID_SLOP
+                and off_grid(b, TRIPLET_GRID) <= GRID_SLOP]
+    return (TRIPLET_GRID if len(triplets) * 10 >= len(lengths)
+            else SIXTEENTH_GRID)
+
+
+def midi_grid(midi):
+    """The grid for a whole file, so its parts cannot land on different ones."""
+    div = float(midi.division or 480)
+    return choose_grid(max(n.duration, 1) / div
+                       for t in midi.tracks for n in t.notes)
+
+
+def from_midi(path, track_name=None, rest_beats=0.25, grid=None):
     """Turn a MIDI track into editor notes.
 
     Returns (bpm, rows, pending), where a row is
@@ -569,6 +616,8 @@ def from_midi(path, track_name=None, rest_beats=0.25, grid=0.25):
     to sing, so an ordinary MIDI file arrives as a song that can be played.
     """
     midi = MidiFile.from_file(path)
+    if grid is None:
+        grid = midi_grid(midi)
     named = _named_tracks(midi)
     if not named:
         raise ValueError('this file has no notes in it')
@@ -604,14 +653,18 @@ def from_midi(path, track_name=None, rest_beats=0.25, grid=0.25):
     return (_tempo(midi), [tuple(r) for r in rows], pending, _sig(midi))
 
 
-def from_midi_tracks(path, names, rest_beats=0.25, grid=0.25):
+def from_midi_tracks(path, names, rest_beats=0.25, grid=None):
     """Several parts of a MIDI file at once, one editor track for each.
 
     Returns (bpm, time signature, [(name, rows, pending)]). The tempo and the
     signature belong to the file rather than to any one part, so the first
-    part's are the song's.
+    part's are the song's. The grid does too: it is settled once, from every
+    note in the file, or two parts of one song could be rounded onto different
+    grids and drift apart.
     """
     out, bpm, sig = [], 120.0, DEFAULT_SIG
+    if grid is None:
+        grid = midi_grid(MidiFile.from_file(path))
     for k, name in enumerate(names):
         bpm, rows, pending, part_sig = from_midi(path, name, rest_beats, grid)
         if not k:
