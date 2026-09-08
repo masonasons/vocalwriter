@@ -548,6 +548,9 @@ class Engine(object):
         added together -- so two parts in the same room go through one
         reverberator and share its tail, and a part in a room of its own is not
         dragged into theirs.
+
+        Panning moves the voices, not the room they are singing in, so each
+        group goes into its reverberator unpanned.
         """
         bpm = float(song.get('bpm', 120))
         consonants = float(song.get('consonants', 1.0))
@@ -567,36 +570,52 @@ class Engine(object):
             left, right = pan_gains(t.get('pan', 0.0))
             own = t.get('reverb')
             rev = song_reverb if own is None else clean_reverb(own)
-            groups.setdefault(rev, []).append((y, vol * left, vol * right))
+            groups.setdefault(rev, []).append((y, vol, left, right))
         parts = [p for group in groups.values() for p in group]
-        n = max(len(y) for y, _l, _r in parts)
+        n = max(len(y) for y, _v, _l, _r in parts)
         stereo = (any(abs(float(t.get('pan', 0.0))) > 1e-6 for t in tracks)
                   or any(wet > 0 for _room, wet in groups))
         if stereo:
             mixes = []
             for rev, group in groups.items():
                 mix = np.zeros((n, 2), dtype=np.float32)
-                for y, gl, gr in group:
-                    mix[:len(y), 0] += y * gl
-                    mix[:len(y), 1] += y * gr
-                mixes.append((rev, mix))
+                # the same voices with the panning left off, which is what
+                # the reverberator is given
+                room = np.zeros((n, 2), dtype=np.float32)
+                for y, vol, gl, gr in group:
+                    mix[:len(y), 0] += y * (vol * gl)
+                    mix[:len(y), 1] += y * (vol * gr)
+                    room[:len(y), 0] += y * vol
+                    room[:len(y), 1] += y * vol
+                mixes.append((rev, mix, room))
             # Several voices at once can add up past full scale. Turning the
             # mix down is a great deal better than clipping it -- and it has
             # to happen before the reverb, which works on 16-bit samples and
             # would clip whatever it was handed.
-            peak = float(np.abs(sum(m for _r, m in mixes)).max()) if n else 0.0
+            peak = float(np.abs(sum(m for _r, m, _q in mixes)).max()) if n else 0.0
             if peak > 1.0:
-                for _rev, mix in mixes:
+                for _rev, mix, room in mixes:
                     mix /= peak
-            done = [self._reverberate(mix, rev) for rev, mix in mixes]
+                    room /= peak
+            done = []
+            for rev, mix, room in mixes:
+                # The reverberator is handed the group unpanned and the
+                # panning added back afterwards, at the gain it mixes the dry
+                # signal in with -- one minus the wet. Handing it the panned
+                # mix instead pans the room along with the voice: a part sung
+                # hard left is answered by a room that is also hard left,
+                # which is not what a room does.
+                out = np.array(self._reverberate(room, rev))
+                out[:n] += (mix - room) * (1.0 - rev[1] / 100.0)
+                done.append(out)
             # a reverb tail makes its group longer than the singing
             out = np.zeros((max(len(d) for d in done), 2), dtype=np.float32)
             for d in done:
                 out[:len(d)] += d
             return out, peak
         out = np.zeros(n, dtype=np.float32)
-        for y, gl, _gr in parts:          # in the middle both gains are the
-            out[:len(y)] += y * gl        # volume, so one channel says it all
+        for y, vol, gl, _gr in parts:     # in the middle both gains are the
+            out[:len(y)] += y * (vol * gl)  # volume, so one channel says it all
         peak = float(np.abs(out).max()) if n else 0.0
         if peak > 1.0:
             # the caller is told the number, so that it can say so rather than
