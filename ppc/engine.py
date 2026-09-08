@@ -697,7 +697,13 @@ class Engine(object):
             except (TypeError, ValueError):
                 pass
         # [(beat, semitones, slides into the next)], in the song's own time
-        bends = sorted(_triples(track.get('bends') or []))
+        # by time alone: two points may share a moment -- that is how a bend
+        # that steps rather than slides is written down, the old value held
+        # right up to the moment and the new one at it -- and sorting on the
+        # whole point would put them in order of value instead, turning the
+        # step into a slide down, a jump back up and a slide down again
+        bends = sorted(_triples(track.get('bends') or []),
+                       key=lambda point: point[0])
         runs, total = phrases(track.get('notes') or [])
         length = max(0.0, total - start) * spb + TAIL_SECONDS
         out = np.zeros(int(round(length * SAMPLE_RATE)), dtype=np.float32)
