@@ -594,7 +594,7 @@ def midi_grid(midi):
                        for t in midi.tracks for n in t.notes)
 
 
-def from_midi(path, track_name=None, rest_beats=0.25, grid=None):
+def from_midi(path, track_name=None, rest_beats=None, grid=None):
     """Turn a MIDI track into editor notes.
 
     Returns (bpm, rows, pending), where a row is
@@ -608,9 +608,12 @@ def from_midi(path, track_name=None, rest_beats=0.25, grid=None):
     before being looked up and the pronunciation is divided over the notes they
     came from.
 
-    Gaps between notes become rests, so the phrasing survives the trip.
-    `rest_beats` is the shortest gap worth keeping; below it the note simply
-    runs on to the next, which is how a legato line is written.
+    Gaps between notes become rests, so the phrasing survives the trip: a
+    gap is a rest whenever it is still there once both its ends have been put
+    on the grid, which leaves out the tick or two a sequencer shaves off a
+    note without leaving out anything a listener would hear. `rest_beats`
+    raises that bar: a gap shorter than it is sung through instead, which is
+    how a legato line is written.
 
     A note that carries neither phonemes nor a word is given `DEFAULT_PHONEME`
     to sing, so an ordinary MIDI file arrives as a song that can be played.
@@ -631,17 +634,39 @@ def from_midi(path, track_name=None, rest_beats=0.25, grid=None):
 
     div = float(midi.division or 480)
     curve = bend_curve(track)
-    # Counting from the start of the file rather than from the track's own
-    # first note. A part that comes in late is written that way -- the pickup
-    # in one part and not in the others is the arrangement -- and starting
-    # every part at its own first note stacks them all on beat one, which puts
-    # the parts out with each other and every note in the wrong bar.
-    rows, cursor = [], 0
-    for n in sorted(track.notes, key=lambda x: x.tick):
-        gap = (n.tick - cursor) / div
-        if gap >= rest_beats:
-            rows.append([['%'], n.pitch, quantise(gap, grid), '', []])
-        beats = quantise(max(n.duration, 1) / div, grid)
+    ordered = sorted(track.notes, key=lambda x: x.tick)
+    # Rounding where each note falls, rather than how long each one is.
+    # Rounding lengths one at a time lets the error mount up until a part is
+    # running ahead of the others, and it cannot tell a rest from the tick a
+    # sequencer shaves off the end of a note so the next one speaks: both are
+    # a gap, and dropping either loses the time it took. Putting every edge on
+    # the grid answers both at once -- the shaved tick lands back where the
+    # note ends, a real rest keeps its own place, and nothing can drift,
+    # because a note reaches exactly as far as the next one's start.
+    #
+    # It also means the count runs from the start of the file rather than
+    # from the track's own first note. A part that comes in late is written
+    # that way -- the pickup in one part and not in the others is the
+    # arrangement -- and starting every part at its own first note would stack
+    # them all on beat one, out with each other and in the wrong bars.
+    step = grid or 1.0 / div
+
+    def edge(ticks):
+        """Which step of the grid a point in the file falls on."""
+        return int(round(ticks / div / step))
+
+    rows, at = [], 0
+    for i, n in enumerate(ordered):
+        span = max(n.duration, 1)
+        start = edge(n.tick)
+        end = max(start + 1, edge(n.tick + span))
+        if i + 1 < len(ordered):
+            # one voice: nothing is held over the note that follows it
+            end = min(end, max(start + 1, edge(ordered[i + 1].tick)))
+        if start > at and (rest_beats is None
+                           or (start - at) * step >= rest_beats):
+            rows.append([['%'], n.pitch, (start - at) * step, '', []])
+            at = start
         word = (n.text or '').strip()
         if n.phonemes:
             ph = [PALETTE.get(x, x) for x in split_phonemes(n.phonemes)]
@@ -649,16 +674,18 @@ def from_midi(path, track_name=None, rest_beats=0.25, grid=None):
             ph = []                      # the lookup will fill it in
         else:
             ph = [DEFAULT_PHONEME]
-        span = max(n.duration, 1)
-        rows.append([ph, n.pitch, beats, word,
+        # whatever gap was not worth a rest is sung through, so the note after
+        # it still falls where the file puts it
+        length = max(1, end - at)
+        rows.append([ph, n.pitch, length * step, word,
                      _bend_over(curve, n.tick, n.tick + span)])
-        cursor = n.tick + span
+        at += length
 
     pending = _pending_words(rows)
     return (_tempo(midi), [tuple(r) for r in rows], pending, _sig(midi))
 
 
-def from_midi_tracks(path, names, rest_beats=0.25, grid=None):
+def from_midi_tracks(path, names, rest_beats=None, grid=None):
     """Several parts of a MIDI file at once, one editor track for each.
 
     Returns (bpm, time signature, [(name, rows, pending)]). The tempo and the
