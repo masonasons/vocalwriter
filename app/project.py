@@ -587,11 +587,54 @@ def choose_grid(lengths):
             else SIXTEENTH_GRID)
 
 
+#: How far off the grid a note may begin and still count as beginning on it.
+#: A sequencer nudges a note a tick either way and nothing musical is that
+#: small, but the smallest thing anyone writes on purpose is larger than this.
+ON_GRID = 1.0 / 96.0
+
+
+def fits_grid(starts, grid):
+    """Whether every note in the file begins on `grid`, give or take a nudge.
+
+    The distance is measured to the nearest multiple rather than through
+    `off_grid`, which never rounds a length below one grid step down to
+    nothing -- right for a length, since no note lasts no time, but a note
+    beginning on the first beat of the song begins at nothing at all.
+    """
+    return all(abs(at - round(at / grid) * grid) <= ON_GRID for at in starts)
+
+
 def midi_grid(midi):
-    """The grid for a whole file, so its parts cannot land on different ones."""
+    """The grid for a whole file, so its parts cannot land on different ones.
+
+    The coarsest grid the file's own writing actually fits, starting from the
+    one its note lengths ask for and halving while the notes do not begin
+    where it says they should. A ritardando written out as notes that grow --
+    which is how one is written when a song can only hold one tempo -- moves
+    the notes after it off any grid the lengths suggest, and rounding them
+    back onto it is rounding the ritardando away: the note that should have
+    been a shade longer than a triplet comes out as exactly a triplet, and
+    the growing never happens.
+
+    A file that fits nothing keeps the coarse grid. That is what a performance
+    recorded from a keyboard looks like, and there the rounding is the point.
+    """
     div = float(midi.division or 480)
-    return choose_grid(max(n.duration, 1) / div
-                       for t in midi.tracks for n in t.notes)
+    notes = [n for t in midi.tracks for n in t.notes]
+    coarse = choose_grid(max(n.duration, 1) / div for n in notes)
+    starts = [n.tick / div for n in notes]
+    if not starts:
+        return coarse
+    grid = coarse
+    while not fits_grid(starts, grid):
+        finer = grid / 2.0
+        if finer <= 2.0 * ON_GRID:
+            # any point at all sits within ON_GRID of a grid this fine, so
+            # the question stops telling one file from another: whatever is
+            # being asked about this one, the answer is no
+            return coarse
+        grid = finer
+    return grid
 
 
 def from_midi(path, track_name=None, rest_beats=None, grid=None):
